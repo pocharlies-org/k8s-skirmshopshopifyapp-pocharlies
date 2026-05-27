@@ -18,5 +18,5 @@ jobs:
       runner: arc-k8s
       run_node: false
       run_docker_build: false
-      kustomize_paths: "k8s"
+      kustomize_paths: ". k8s"
     secrets: inherit
