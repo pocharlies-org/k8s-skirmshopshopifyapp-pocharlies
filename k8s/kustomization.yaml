@@ -3,13 +3,60 @@ kind: Kustomization
 
 namespace: skirmshop
 
+# Reuse the shared Shopify-app base (same pattern as k8s-shopify-sii-pocharlies):
+# Deployment `app` + Service `app` + edge IngressRoute `app`.
 resources:
-  - externalsecret.yaml
-  - manifest.yaml
+  - https://github.com/pocharlies/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
+
+namePrefix: rag-
 
 labels:
-  - includeSelectors: false
+  - includeSelectors: true
     pairs:
-      app.kubernetes.io/part-of: skirmshop
-      app.kubernetes.io/managed-by: gitops
-      e-dani.com/activation: disabled
+      app.kubernetes.io/instance: rag
+
+images:
+  - name: shopify-app
+    newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
+    newTag: v1.5.0
+
+patches:
+  # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
+  # the ROOT of skirmshop.e-dani.com (application_url /app/rag, auth at /auth).
+  - target: { kind: Deployment, name: app }
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: app
+      spec:
+        template:
+          spec:
+            # SII client certificate (same secret + keys as the sii app). The app
+            # carries SII/invoicing code; mounting avoids cert-path errors on the
+            # routes that touch it. Source secret `sii-certificate`: sii.p12 + passphrase.
+            volumes:
+              - name: sii-certificate
+                secret: { secretName: sii-certificate }
+            containers:
+              - name: app
+                env:
+                  # AUTH INVARIANT: must equal the public URL exactly (root, no prefix).
+                  - { name: SHOPIFY_APP_URL, value: "https://skirmshop.e-dani.com" }
+                  - { name: SCOPES, value: "write_products,read_products,write_content,read_content,write_inventory,read_inventory,write_online_store_navigation,read_online_store_navigation,read_customers,write_customers,read_customer_address,read_customer_email,read_customer_name,read_customer_phone,read_reports,read_locations,read_publications,write_publications,write_orders,read_orders,write_order_edits,read_order_edits,write_merchant_managed_fulfillment_orders,read_merchant_managed_fulfillment_orders,read_translations,write_translations,write_locales,write_discounts,read_discounts,read_shipping,write_shipping,read_markets,write_markets,read_themes,write_themes,read_store_credit_accounts,write_store_credit_account_transactions,read_metaobject_definitions,write_metaobject_definitions,read_metaobjects,write_metaobjects,read_draft_orders,write_draft_orders,read_files,write_files" }
+                  # Catalog RAG sync target = brain v2 in-cluster (was skirmshop-brain-v2:5001 on docker).
+                  - { name: POCHARLIES_RAG_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
+                  - { name: SII_CERTIFICATE_PATH, value: "/app/secrets/sii.p12" }
+                  - name: SII_CERTIFICATE_PASSPHRASE
+                    valueFrom:
+                      secretKeyRef: { name: sii-certificate, key: passphrase }
+                envFrom:
+                  - secretRef: { name: rag-secrets }
+                volumeMounts:
+                  - { name: sii-certificate, mountPath: /app/secrets, readOnly: true }
+  # Embedded app mounted at root: match the bare host, no PathPrefix, no strip.
+  - target: { group: traefik.io, version: v1alpha1, kind: IngressRoute, name: app }
+    patch: |-
+      - op: replace
+        path: /spec/routes/0/match
+        value: Host(`skirmshop.e-dani.com`)
