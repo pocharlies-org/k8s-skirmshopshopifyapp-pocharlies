@@ -16,6 +16,7 @@ spec:
   #      after another bulk catalog change) is skipped + logged for manual review,
   #      so the products/update → recategorize cascade can never re-trigger.
   # Steady-state drift is ~0 (synapse preserves these facets; material excluded).
+  suspend: false
   schedule: "30 2 * * *"
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
