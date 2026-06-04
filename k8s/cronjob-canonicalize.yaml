@@ -1,0 +1,36 @@
+# Nightly taxonomy canonicalize-live job (ongoing-durability for the closed
+# vocabulary). Walks all products, snaps any drifted closed-facet metafield value
+# back to canonical (deterministic, no LLM). Catches drift from new products and
+# from synapse's product-creator. Excludes `material` (synapse owns it).
+# Entry point = the esbuild bundle build/taxonomy-canonicalize.cjs (Dockerfile).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: taxonomy-canonicalize
+spec:
+  schedule: "30 2 * * *"
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: canonicalize
+              image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
+              command: ["node", "build/taxonomy-canonicalize.cjs"]
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
