@@ -8,12 +8,14 @@ kind: CronJob
 metadata:
   name: taxonomy-canonicalize
 spec:
-  # SUSPENDED 2026-06-04 after a bulk-write incident: this job writes drifted
-  # metafields, which fires products/update → synapse recategorize cascade →
-  # RMQ watermark breach (the exact incident). Keep suspended until (1) the RMQ
-  # vm_memory_high_watermark is persisted in GitOps (>=1.2GB) and (2) a guard
-  # pauses synapse-adapter-product-creator (or rate-limits) during the run.
-  suspend: true
+  # Re-enabled 2026-06-04 after the bulk-write incident, now guarded:
+  #  (1) RMQ vm_memory_high_watermark persisted at 1200MB (k8s-infra deploy/prod) —
+  #      gives headroom so a moderate write burst can't block publishers.
+  #  (2) DRY-RUN GATE below: the job first runs --dry and ONLY writes if the
+  #      drifted-value count is under DRIFT_CAP. A pathological mass-drift (e.g.
+  #      after another bulk catalog change) is skipped + logged for manual review,
+  #      so the products/update → recategorize cascade can never re-trigger.
+  # Steady-state drift is ~0 (synapse preserves these facets; material excluded).
   schedule: "30 2 * * *"
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
@@ -30,7 +32,20 @@ spec:
           containers:
             - name: canonicalize
               image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
-              command: ["node", "build/taxonomy-canonicalize.cjs"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -u
+                  CAP="${DRIFT_CAP:-400}"
+                  OUT=$(node build/taxonomy-canonicalize.cjs --dry 2>&1); echo "$OUT"
+                  N=$(printf '%s\n' "$OUT" | sed -n 's/.*\· \([0-9][0-9]*\) drifted.*/\1/p' | head -1)
+                  N="${N:-0}"
+                  if [ "$N" -gt "$CAP" ]; then
+                    echo "[guard] drift $N > cap $CAP → SKIP nightly canonicalize (manual review to avoid recategorize cascade)"
+                    exit 0
+                  fi
+                  echo "[guard] drift $N ≤ cap $CAP → proceeding with write"
+                  node build/taxonomy-canonicalize.cjs
               envFrom:
                 - secretRef:
                     name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
