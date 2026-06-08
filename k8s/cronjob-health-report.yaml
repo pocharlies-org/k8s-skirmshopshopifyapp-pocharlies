@@ -1,0 +1,47 @@
+# Weekly taxonomy HEALTH REPORT. Audits catalog canonical drift (bulk, cursor-bug-
+# proof) + verifies the storefront-filter feature (6 metafield filters live, the
+# noisy `tag` filter removed), then posts a status to the synapse Telegram group
+# topic "Taxonomía & Filtros" (thread 33452) via @synapse_skirmshop_bot.
+# Entry point = the esbuild bundle build/taxonomy-health-report.cjs (Dockerfile).
+# Read-only against Shopify + storefront (no writes) — safe to run any time.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: taxonomy-health-report
+spec:
+  suspend: false
+  schedule: "0 8 * * 1" # Mondays 08:00
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: health-report
+              image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
+              command: ["node", "build/taxonomy-health-report.cjs"]
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
+              env:
+                # @synapse_skirmshop_bot token (same Vault path observability/prod/telegram).
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: labels-telegram-bot
+                      key: bot_token
+                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" forum
+                - { name: TELEGRAM_THREAD_ID, value: "33452" } # topic "Taxonomía & Filtros"
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
