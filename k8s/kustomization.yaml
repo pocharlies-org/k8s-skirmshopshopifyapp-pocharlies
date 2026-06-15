@@ -20,7 +20,7 @@ labels:
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: v1.5.48
+    newTag: v1.5.49
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
@@ -49,6 +49,11 @@ patches:
                   # the UI + /api/price-lists require a real session. Overrides the
                   # rag-secrets envFrom value. ROLLBACK: set "true" + redeploy.
                   - { name: DEV_MODE, value: "false" }
+                  # Reconciliación autónoma: arma el lazo aprobar→aplicar (el
+                  # apply-tick de synapse polea las `approved`). El apply sigue
+                  # en dry-run hasta que la Fase 5 ponga RECONCILE_APPLY_DRYRUN=false
+                  # en el adapter synapse. Kill-switch global: poner "false" aquí.
+                  - { name: RECONCILE_APPLY_ENABLED, value: "true" }
                   - { name: SCOPES, value: "write_products,read_products,write_content,read_content,write_inventory,read_inventory,write_online_store_navigation,read_online_store_navigation,read_customers,write_customers,read_customer_address,read_customer_email,read_customer_name,read_customer_phone,read_reports,read_locations,read_publications,write_publications,write_orders,read_orders,write_order_edits,read_order_edits,write_merchant_managed_fulfillment_orders,read_merchant_managed_fulfillment_orders,read_translations,write_translations,write_locales,write_discounts,read_discounts,read_shipping,write_shipping,read_markets,write_markets,read_themes,write_themes,read_store_credit_accounts,write_store_credit_account_transactions,read_metaobject_definitions,write_metaobject_definitions,read_metaobjects,write_metaobjects,read_draft_orders,write_draft_orders,read_files,write_files" }
                   # Catalog RAG sync target = brain v2 in-cluster (was skirmshop-brain-v2:5001 on docker).
                   - { name: POCHARLIES_RAG_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
