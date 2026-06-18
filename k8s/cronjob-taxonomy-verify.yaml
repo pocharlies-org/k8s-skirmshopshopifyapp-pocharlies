@@ -8,10 +8,10 @@
 # store through the human-gated apply path (/app/content). Entry point = the
 # esbuild bundle build/taxonomy-verify.cjs (Dockerfile).
 #
-# suspend: true UNTIL: (1) a new image is built carrying build/taxonomy-verify.cjs
-# and its newTag is bumped in kustomization.yaml, AND (2) the FASE 0 signal
-# calibration gate passes (dry-run `changed` rate under threshold). Flip to false
-# to activate. Anti-collision: runs 04:00, well clear of the canonicalize write
+# ACTIVATED 2026-06-19 (image v1.5.53 = feedback feature + taxonomy v1 policy).
+# FASE 0 calibration passed: added-only v1 signal → 8 proposals / 200 products =
+# 4.0%, under the 5% gate. Runs nightly; review proposals at /app/content + the
+# Telegram digest (topic 33452). Anti-collision: runs 04:00, well clear of the canonicalize write
 # window (02:30 + activeDeadlineSeconds 3600 → worst case 03:30). NOTE:
 # concurrencyPolicy:Forbid only guards THIS CronJob against itself, NOT against
 # the canonicalize cron — the 04:00 slot is the cross-cron safety margin.
@@ -20,7 +20,7 @@ kind: CronJob
 metadata:
   name: taxonomy-verify
 spec:
-  suspend: true
+  suspend: false
   schedule: "0 4 * * *"
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
