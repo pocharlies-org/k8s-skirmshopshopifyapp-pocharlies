@@ -9,6 +9,8 @@ resources:
   - https://github.com/pocharlies/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
   - cronjob-canonicalize.yaml
   - cronjob-health-report.yaml
+  - externalsecret-litellm.yaml
+  - cronjob-taxonomy-verify.yaml
 
 namePrefix: rag-
 

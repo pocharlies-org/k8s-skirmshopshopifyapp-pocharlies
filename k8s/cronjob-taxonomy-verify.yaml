@@ -1,0 +1,71 @@
+# Nightly taxonomy SEMANTIC VERIFIER (proposal-only). Closes the gap the
+# deterministic canonicalize job (cronjob-canonicalize.yaml) leaves open: that one
+# only snaps FORMAT/alias drift, it never checks whether a facet value is
+# semantically CORRECT. This job re-classifies recently-changed / missing-facet
+# products via the LLM (role alias `tooling`), diffs current↔proposed canonical,
+# and writes REVIEW-ONLY AIProposal rows (proposalType "taxonomy_verification")
+# plus a Telegram digest. It NEVER writes to Shopify — corrections only reach the
+# store through the human-gated apply path (/app/content). Entry point = the
+# esbuild bundle build/taxonomy-verify.cjs (Dockerfile).
+#
+# suspend: true UNTIL: (1) a new image is built carrying build/taxonomy-verify.cjs
+# and its newTag is bumped in kustomization.yaml, AND (2) the FASE 0 signal
+# calibration gate passes (dry-run `changed` rate under threshold). Flip to false
+# to activate. Anti-collision: runs 04:00, well clear of the canonicalize write
+# window (02:30 + activeDeadlineSeconds 3600 → worst case 03:30). NOTE:
+# concurrencyPolicy:Forbid only guards THIS CronJob against itself, NOT against
+# the canonicalize cron — the 04:00 slot is the cross-cron safety margin.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: taxonomy-verify
+spec:
+  suspend: true
+  schedule: "0 4 * * *"
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 5400 # LLM over up to MAX_PRODUCTS in batches — generous
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: taxonomy-verify
+              image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
+              command: ["node", "build/taxonomy-verify.cjs"]
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION / DATABASE_URL
+              env:
+                # LiteLLM in-cluster gateway (NOT the 127.0.0.1:14000 dev default).
+                - { name: LITELLM_BASE, value: "http://litellm.litellm.svc.cluster.local:4000" }
+                # Master key materialized by externalsecret-litellm.yaml (Vault secret/litellm).
+                - name: LITELLM_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: rag-litellm-key
+                      key: LITELLM_KEY
+                # @synapse_skirmshop_bot token (same Vault path observability/prod/telegram).
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: labels-telegram-bot
+                      key: bot_token
+                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" forum
+                - { name: TELEGRAM_THREAD_ID, value: "33452" } # topic "Taxonomía & Filtros"
+                # Cost / coverage caps (the script also has its own defaults).
+                - { name: MAX_PRODUCTS, value: "300" }
+                - { name: MAX_PROPOSALS, value: "100" }
+                - { name: WINDOW_DAYS, value: "7" }
+                - { name: MAX_TOKENS_BUDGET, value: "4000000" }
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
