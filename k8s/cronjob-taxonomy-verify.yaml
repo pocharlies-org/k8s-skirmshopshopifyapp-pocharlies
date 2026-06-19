@@ -78,12 +78,11 @@ spec:
                 # thread 33452 ("Taxonomía & Filtros") returned "message thread not
                 # found" on the first run, so no TELEGRAM_THREAD_ID → posts to General.
                 - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" (skirmshop ops)
-                # Signal policy. Immediate mitigation: product_kind only — drops the
-                # part_category gap-fill that false-positived on complete replicas in
-                # the first batch. The v1.5.54 image gates part_category to PART
-                # products in code, after which this can be relaxed to
-                # "product_kind,part_category" to restore genuine part fills safely.
-                - { name: ADDED_DIMS, value: "product_kind" }
+                # Signal policy. v1.5.54 gates part_category gap-fills to PART products
+                # in code (diffFacets), so part_category is safe to re-enable: genuine
+                # part fills (uppers/chassis/kits) surface, whole-gun false positives are
+                # suppressed. (Stopgap was product_kind-only before the gate shipped.)
+                - { name: ADDED_DIMS, value: "product_kind,part_category" }
                 # Cost / coverage caps (the script also has its own defaults).
                 - { name: MAX_PRODUCTS, value: "300" }
                 - { name: MAX_PROPOSALS, value: "100" }
