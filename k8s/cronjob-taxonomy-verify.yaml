@@ -74,8 +74,16 @@ spec:
                     secretKeyRef:
                       name: labels-telegram-bot
                       key: bot_token
-                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" forum
-                - { name: TELEGRAM_THREAD_ID, value: "33452" } # topic "Taxonomía & Filtros"
+                # Digest → "Synapse monitor" (skirmshop ops) GENERAL topic. The old
+                # thread 33452 ("Taxonomía & Filtros") returned "message thread not
+                # found" on the first run, so no TELEGRAM_THREAD_ID → posts to General.
+                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" (skirmshop ops)
+                # Signal policy. Immediate mitigation: product_kind only — drops the
+                # part_category gap-fill that false-positived on complete replicas in
+                # the first batch. The v1.5.54 image gates part_category to PART
+                # products in code, after which this can be relaxed to
+                # "product_kind,part_category" to restore genuine part fills safely.
+                - { name: ADDED_DIMS, value: "product_kind" }
                 # Cost / coverage caps (the script also has its own defaults).
                 - { name: MAX_PRODUCTS, value: "300" }
                 - { name: MAX_PROPOSALS, value: "100" }
