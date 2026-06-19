@@ -42,6 +42,24 @@ spec:
                 - secretRef:
                     name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION / DATABASE_URL
               env:
+                # DB connection — MUST mirror the base Deployment's explicit override
+                # (k8s-shopify-framework base): rag-secrets carries a BOGUS
+                # DATABASE_URL host (shared-postgres, ENOTFOUND); the real CNPG endpoint
+                # is built here from the shared-postgres-app secret. Without this the
+                # cron inherits the broken envFrom value and crashes at the Prisma write
+                # (PrismaClientInitializationError, observed on the first 04:00 run).
+                # DB_USER/DB_PASSWORD must precede DATABASE_URL for $(VAR) expansion.
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: username
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: password
+                - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop" }
                 # LiteLLM in-cluster gateway (NOT the 127.0.0.1:14000 dev default).
                 - { name: LITELLM_BASE, value: "http://litellm.litellm.svc.cluster.local:4000" }
                 # Master key materialized by externalsecret-litellm.yaml (Vault secret/litellm).
