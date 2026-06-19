@@ -22,7 +22,7 @@ labels:
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: v1.5.54
+    newTag: v1.5.55
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
@@ -56,6 +56,12 @@ patches:
                   # en dry-run hasta que la Fase 5 ponga RECONCILE_APPLY_DRYRUN=false
                   # en el adapter synapse. Kill-switch global: poner "false" aquí.
                   - { name: RECONCILE_APPLY_ENABLED, value: "true" }
+                  # A: create-draft autónomo. El poller (create-draft.v1 event +
+                  # create-draft-tick schedule) crea DRAFTS para productos NUEVOS
+                  # unmatched encolados por el sync; gated per-fabricante por
+                  # ManufacturerCatalog.autoCreateDrafts (default false). DRAFTS no
+                  # se publican. Kill-switch global: poner "false" aquí.
+                  - { name: CATALOG_CREATE_DRAFT_ENABLED, value: "true" }
                   - { name: SCOPES, value: "write_products,read_products,write_content,read_content,write_inventory,read_inventory,write_online_store_navigation,read_online_store_navigation,read_customers,write_customers,read_customer_address,read_customer_email,read_customer_name,read_customer_phone,read_reports,read_locations,read_publications,write_publications,write_orders,read_orders,write_order_edits,read_order_edits,write_merchant_managed_fulfillment_orders,read_merchant_managed_fulfillment_orders,read_translations,write_translations,write_locales,write_discounts,read_discounts,read_shipping,write_shipping,read_markets,write_markets,read_themes,write_themes,read_store_credit_accounts,write_store_credit_account_transactions,read_metaobject_definitions,write_metaobject_definitions,read_metaobjects,write_metaobjects,read_draft_orders,write_draft_orders,read_files,write_files" }
                   # Catalog RAG sync target = brain v2 in-cluster (was skirmshop-brain-v2:5001 on docker).
                   - { name: POCHARLIES_RAG_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
