@@ -11,6 +11,7 @@ resources:
   - cronjob-health-report.yaml
   - externalsecret-litellm.yaml
   - cronjob-taxonomy-verify.yaml
+  - cronjob-proposals-digest.yaml
 
 namePrefix: rag-
 

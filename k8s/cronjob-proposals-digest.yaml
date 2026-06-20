@@ -1,0 +1,173 @@
+# Daily AI-PROPOSALS DIGEST → Telegram ("Synapse monitor" / skirmshop ops, General).
+#
+# Read-only summary of the AIProposal review queue shown on the "Taxonomy Filters"
+# page (/app/content → Proposals tab): pending / approved / applied / rejected
+# counts, the pending breakdown per proposalType, the latest pending items, and a
+# review link. SELECTs only — NEVER writes to Postgres or Shopify.
+#
+# Self-contained (no app-image coupling, no esbuild bundle): an initContainer
+# (postgres:16-alpine → psql) renders the full Telegram sendMessage JSON body
+# server-side in SQL (jsonb_build_object = bulletproof HTML/JSON escaping) into a
+# shared volume; the main container (curlimages/curl) POSTs it. Validated E2E
+# 2026-06-21 (live DB → Telegram General, message_id 34613).
+#
+# Destination = the "Synapse monitor" forum GENERAL topic (no message_thread_id):
+# the old thread 33452 ("Taxonomía & Filtros") is GONE — the Bot API returns
+# "message thread not found" — so the verify cron and this one both post to General.
+#
+# DB endpoint mirrors cronjob-taxonomy-verify.yaml: the rag-secrets DATABASE_URL
+# host is bogus (shared-postgres, ENOTFOUND); the real CNPG endpoint is
+# postgres-shared-rw.databases.svc + the shared-postgres-app credentials.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proposals-digest-sql
+data:
+  digest.sql: |
+    -- Renders the full Telegram /sendMessage request body as one JSON line.
+    -- psql vars: :chat (chat_id), :link (review URL).
+    WITH g AS (
+      SELECT "proposalType" AS pt, "status" AS st, count(*)::int AS n
+      FROM "AIProposal" GROUP BY 1,2
+    ),
+    tot AS (
+      SELECT
+        coalesce(sum(n) FILTER (WHERE st='pending'),0)  AS pending,
+        coalesce(sum(n) FILTER (WHERE st='approved'),0) AS approved,
+        coalesce(sum(n) FILTER (WHERE st='applied'),0)  AS applied,
+        coalesce(sum(n) FILTER (WHERE st='rejected'),0) AS rejected
+      FROM g
+    ),
+    lbl AS (
+      SELECT n,
+        CASE pt WHEN 'taxonomy_verification' THEN 'Taxonomy Verification'
+                WHEN 'categorization' THEN 'Categorization'
+                WHEN 'description_review' THEN 'Description Review' ELSE pt END AS label,
+        CASE pt WHEN 'taxonomy_verification' THEN 0
+                WHEN 'categorization' THEN 1
+                WHEN 'description_review' THEN 2 ELSE 9 END AS ord
+      FROM g WHERE st='pending'
+    ),
+    by_type AS (
+      SELECT string_agg('• '|| label ||': <b>'|| n ||'</b>', chr(10) ORDER BY ord) AS block FROM lbl
+    ),
+    recent AS (
+      SELECT string_agg(
+        '• ' || replace(replace(replace(left("productTitle",70),'&','&amp;'),'<','&lt;'),'>','&gt;')
+        || ' <i>(' || CASE "proposalType"
+            WHEN 'taxonomy_verification' THEN 'Taxonomy Verification'
+            WHEN 'categorization' THEN 'Categorization'
+            WHEN 'description_review' THEN 'Description Review' ELSE "proposalType" END
+        || ', ' || coalesce("confidence",'?') || ')</i>',
+        chr(10) ORDER BY "createdAt" DESC) AS block
+      FROM (SELECT * FROM "AIProposal" WHERE "status"='pending' ORDER BY "createdAt" DESC LIMIT 8) r
+    ),
+    msg AS (
+      SELECT
+        CASE WHEN t.pending > 0
+          THEN '📋 <b>Propuestas de taxonomía — '|| t.pending ||' pendiente'|| CASE WHEN t.pending=1 THEN '' ELSE 's' END ||'</b>'
+          ELSE '📋 <b>Propuestas de taxonomía — 0 pendientes</b> ✅' END
+        || chr(10) || chr(10)
+        || CASE WHEN t.pending > 0
+          THEN '<b>Pendientes por tipo</b>'|| chr(10) || bt.block || chr(10) || chr(10)
+               || CASE WHEN rc.block IS NOT NULL THEN '<b>Últimas pendientes</b>'|| chr(10) || rc.block || chr(10) || chr(10) ELSE '' END
+          ELSE 'Nada que revisar hoy.'|| chr(10) || chr(10) END
+        || '<b>Estado global</b>'|| chr(10)
+        || '⏳ '|| t.pending ||' pendientes · 👍 '|| t.approved ||' aprobadas · ✅ '|| t.applied ||' aplicadas · ❌ '|| t.rejected ||' rechazadas'
+        || chr(10) || chr(10)
+        || '🔗 Revisar/aprobar: ' || :'link'  AS body
+      FROM tot t CROSS JOIN by_type bt CROSS JOIN recent rc
+    )
+    SELECT jsonb_build_object(
+      'chat_id', :'chat',
+      'text', body,
+      'parse_mode', 'HTML',
+      'disable_web_page_preview', true
+    )::text FROM msg;
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: taxonomy-proposals-digest
+spec:
+  suspend: false
+  schedule: "0 12 * * *" # 12:00 Europe/Madrid
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          restartPolicy: Never
+          # ── Stage 1: render the Telegram JSON body from the live DB ──
+          initContainers:
+            - name: build-body
+              image: postgres:16-alpine # psql client only
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  psql -At -v chat="$CHAT_ID" -v link="$APP_LINK" -f /sql/digest.sql > /shared/body.json
+                  bytes=$(wc -c < /shared/body.json)
+                  echo "build-body: wrote /shared/body.json ($bytes bytes)"
+                  test "$bytes" -gt 2
+              env:
+                - { name: PGHOST, value: "postgres-shared-rw.databases.svc.cluster.local" }
+                - { name: PGPORT, value: "5432" }
+                - { name: PGDATABASE, value: "skirmshop" }
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: username
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: password
+                - { name: CHAT_ID, value: "-1003785136626" } # "Synapse monitor" (skirmshop ops)
+                - { name: APP_LINK, value: "https://skirmshop.e-dani.com/app/content" }
+              volumeMounts:
+                - { name: sql, mountPath: /sql, readOnly: true }
+                - { name: shared, mountPath: /shared }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 128Mi }
+          # ── Stage 2: POST it to the Telegram Bot API ──
+          containers:
+            - name: send
+              image: curlimages/curl:8.16.0
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+                    -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                    -H 'Content-Type: application/json' --data @/shared/body.json)
+                  echo "send: http=$code resp=$(cat /tmp/resp.json)"
+                  grep -q '"ok":true' /tmp/resp.json
+              env:
+                # @synapse_skirmshop_bot token (Vault observability/prod/telegram).
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: labels-telegram-bot
+                      key: bot_token
+              volumeMounts:
+                - { name: shared, mountPath: /shared, readOnly: true }
+              resources:
+                requests: { cpu: 50m, memory: 32Mi }
+                limits: { memory: 96Mi }
+          volumes:
+            - name: sql
+              configMap:
+                name: proposals-digest-sql
+            - name: shared
+              emptyDir: {}
