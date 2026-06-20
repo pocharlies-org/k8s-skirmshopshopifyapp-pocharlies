@@ -1,0 +1,65 @@
+# Daily RECONCILIATION SUMMARY → Telegram. At 12:00 (Europe/Madrid) aggregates
+# the global reconciliation queue (proposed by provider/kind, approved-but-not-
+# applied, applied-24h, failed) and posts a digest with the APPLY link to
+# /app/reconcile. Read-only against the DB (groupBy/count only — no writes).
+# Entry point = the esbuild bundle build/reconcile-daily-summary.cjs (Dockerfile).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reconcile-summary
+spec:
+  suspend: false
+  schedule: "0 12 * * *" # daily 12:00
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: reconcile-summary
+              image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
+              command: ["node", "build/reconcile-daily-summary.cjs"]
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # carries a BOGUS DATABASE_URL host — overridden below
+              env:
+                # DB connection — MUST mirror the base Deployment / taxonomy-verify
+                # override: rag-secrets' DATABASE_URL points at a non-existent host
+                # (shared-postgres, ENOTFOUND); the real CNPG endpoint is built here
+                # from shared-postgres-app. DB_USER/DB_PASSWORD must precede
+                # DATABASE_URL for $(VAR) expansion.
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: username
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: password
+                - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop" }
+                # @synapse_skirmshop_bot token (same Vault path observability/prod/telegram).
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: labels-telegram-bot
+                      key: bot_token
+                # Digest → "Synapse monitor" (skirmshop ops) GENERAL topic, same as
+                # taxonomy-verify (no thread id → posts to General, always resolvable).
+                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" }
+                # Apply link surfaced in the digest (embedded app page at the root host).
+                - { name: RECONCILE_PANEL_URL, value: "https://skirmshop.e-dani.com/app/reconcile" }
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
