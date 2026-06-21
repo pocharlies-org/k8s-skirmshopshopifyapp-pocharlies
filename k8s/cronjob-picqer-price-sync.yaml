@@ -1,0 +1,50 @@
+# Daily PICQER PRICE SYNC → brain. Keeps the Prices tab's Coste/Margen (Picqer
+# fixedstockprice) and NL (skirmshop.nl) fresh for the WHOLE catalog, not just the
+# ~650 products covered by the synapse manufacturer-sync driver. Self-contained:
+# node:20 runs the script from the generated ConfigMap (picqer-price-sync-script);
+# no app image rebuild. GAP-FILL: only fills products missing cost/NL, never
+# overwrites the driver's data (see the script header for the v1 limitation).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: picqer-price-sync
+spec:
+  suspend: false
+  schedule: "30 4 * * *" # daily 04:30 (Europe/Madrid) — after the nightly catalog syncs
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800 # paginates Picqer (~140 pages) + both storefronts + brain
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: picqer-price-sync
+              image: node:20-alpine
+              command: ["node", "/script/picqer-price-sync.js"]
+              env:
+                - { name: APPLY, value: "1" }
+                # In-cluster brain (no port → Service :80). Same host the rag-app uses.
+                - { name: BRAIN_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
+                - name: BRAIN_API_KEY
+                  valueFrom: { secretKeyRef: { name: rag-secrets, key: BRAIN_API_KEY } }
+                # Picqer creds reused from the collections-tree app's ESO secret
+                # (same namespace). Both keys verified present.
+                - name: PICQER_API_KEY
+                  valueFrom: { secretKeyRef: { name: collections-tree-secrets, key: PICQER_API_KEY } }
+                - name: PICQER_SUBDOMAIN
+                  valueFrom: { secretKeyRef: { name: collections-tree-secrets, key: PICQER_SUBDOMAIN } }
+              volumeMounts:
+                - { name: script, mountPath: /script }
+              resources:
+                requests: { cpu: 100m, memory: 256Mi }
+                limits: { memory: 512Mi }
+          volumes:
+            - name: script
+              configMap:
+                name: picqer-price-sync-script

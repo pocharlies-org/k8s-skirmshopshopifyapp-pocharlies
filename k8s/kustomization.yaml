@@ -13,6 +13,7 @@ resources:
   - cronjob-taxonomy-verify.yaml
   - cronjob-proposals-digest.yaml
   - cronjob-reconcile-summary.yaml
+  - cronjob-picqer-price-sync.yaml
 
 namePrefix: rag-
 
@@ -20,6 +21,15 @@ labels:
   - includeSelectors: true
     pairs:
       app.kubernetes.io/instance: rag
+
+# Script for the picqer-price-sync CronJob, mounted as a ConfigMap. The hash
+# suffix makes it immutable + rolls the next Job when the script changes. The
+# CronJob volume references the base name `picqer-price-sync-script`; kustomize
+# rewrites it to the hashed+prefixed name.
+configMapGenerator:
+  - name: picqer-price-sync-script
+    files:
+      - picqer-price-sync.js
 
 images:
   - name: shopify-app
