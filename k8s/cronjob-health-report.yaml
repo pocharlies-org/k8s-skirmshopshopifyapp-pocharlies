@@ -37,8 +37,10 @@ spec:
                     secretKeyRef:
                       name: labels-telegram-bot
                       key: bot_token
-                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" forum
-                - { name: TELEGRAM_THREAD_ID, value: "33452" } # topic "Taxonomía & Filtros"
+                # Report → Skirmshop ES OP / Katálogo RAG Propuestas. This CronJob
+                # remains suspended; do not use the Synapse SRE monitor for catalog reports.
+                - { name: TELEGRAM_CHAT_ID, value: "-1003984393379" }
+                - { name: TELEGRAM_THREAD_ID, value: "11116" }
               resources:
                 requests:
                   cpu: 100m

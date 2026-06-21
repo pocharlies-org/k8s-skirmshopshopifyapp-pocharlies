@@ -11,7 +11,7 @@
 # ACTIVATED 2026-06-19 (image v1.5.53 = feedback feature + taxonomy v1 policy).
 # FASE 0 calibration passed: added-only v1 signal → 8 proposals / 200 products =
 # 4.0%, under the 5% gate. Runs nightly; review proposals at /app/content + the
-# Telegram digest (topic 33452). Anti-collision: runs 04:00, well clear of the canonicalize write
+# Telegram digest (Skirmshop ES OP / RAG proposals topic). Anti-collision: runs 04:00, well clear of the canonicalize write
 # window (02:30 + activeDeadlineSeconds 3600 → worst case 03:30). NOTE:
 # concurrencyPolicy:Forbid only guards THIS CronJob against itself, NOT against
 # the canonicalize cron — the 04:00 slot is the cross-cron safety margin.
@@ -74,10 +74,10 @@ spec:
                     secretKeyRef:
                       name: labels-telegram-bot
                       key: bot_token
-                # Digest → "Synapse monitor" (skirmshop ops) GENERAL topic. The old
-                # thread 33452 ("Taxonomía & Filtros") returned "message thread not
-                # found" on the first run, so no TELEGRAM_THREAD_ID → posts to General.
-                - { name: TELEGRAM_CHAT_ID, value: "-1003785136626" } # "Synapse monitor" (skirmshop ops)
+                # Digest → Skirmshop ES OP / Katálogo RAG Propuestas. Keep business
+                # catalog reports out of the Synapse SRE monitor.
+                - { name: TELEGRAM_CHAT_ID, value: "-1003984393379" }
+                - { name: TELEGRAM_THREAD_ID, value: "11116" }
                 # Signal policy. v1.5.54 gates part_category gap-fills to PART products
                 # in code (diffFacets), so part_category is safe to re-enable: genuine
                 # part fills (uppers/chassis/kits) surface, whole-gun false positives are
