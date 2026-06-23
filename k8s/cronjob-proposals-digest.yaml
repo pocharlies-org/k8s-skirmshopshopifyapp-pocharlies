@@ -1,4 +1,4 @@
-# Daily AI-PROPOSALS DIGEST → Telegram ("Synapse monitor" / skirmshop ops, General).
+# Daily AI-PROPOSALS DIGEST → Telegram (Skirmshop ES OP / Katálogo RAG Propuestas).
 #
 # Read-only summary of the AIProposal review queue shown on the "Taxonomy Filters"
 # page (/app/content → Proposals tab): pending / approved / applied / rejected
@@ -11,9 +11,9 @@
 # shared volume; the main container (curlimages/curl) POSTs it. Validated E2E
 # 2026-06-21 (live DB → Telegram General, message_id 34613).
 #
-# Destination = the "Synapse monitor" forum GENERAL topic (no message_thread_id):
-# the old thread 33452 ("Taxonomía & Filtros") is GONE — the Bot API returns
-# "message thread not found" — so the verify cron and this one both post to General.
+# Destination = Skirmshop ES OP / Katálogo RAG Propuestas (thread 11116),
+# matching cronjob-health-report.yaml. Keep catalog review noise out of the
+# Synapse SRE monitor group.
 #
 # DB endpoint mirrors cronjob-taxonomy-verify.yaml: the rag-secrets DATABASE_URL
 # host is bogus (shared-postgres, ENOTFOUND); the real CNPG endpoint is
@@ -25,7 +25,7 @@ metadata:
 data:
   digest.sql: |
     -- Renders the full Telegram /sendMessage request body as one JSON line.
-    -- psql vars: :chat (chat_id), :link (review URL).
+    -- psql vars: :chat (chat_id), :thread (message_thread_id), :link (review URL).
     WITH g AS (
       SELECT "proposalType" AS pt, "status" AS st, count(*)::int AS n
       FROM "AIProposal" GROUP BY 1,2
@@ -80,6 +80,7 @@ data:
     )
     SELECT jsonb_build_object(
       'chat_id', :'chat',
+      'message_thread_id', :'thread'::int,
       'text', body,
       'parse_mode', 'HTML',
       'disable_web_page_preview', true
@@ -113,7 +114,7 @@ spec:
                 - -c
                 - |
                   set -eu
-                  psql -At -v chat="$CHAT_ID" -v link="$APP_LINK" -f /sql/digest.sql > /shared/body.json
+                  psql -At -v chat="$CHAT_ID" -v thread="$THREAD_ID" -v link="$APP_LINK" -f /sql/digest.sql > /shared/body.json
                   bytes=$(wc -c < /shared/body.json)
                   echo "build-body: wrote /shared/body.json ($bytes bytes)"
                   test "$bytes" -gt 2
@@ -131,7 +132,8 @@ spec:
                     secretKeyRef:
                       name: shared-postgres-app
                       key: password
-                - { name: CHAT_ID, value: "-1003785136626" } # "Synapse monitor" (skirmshop ops)
+                - { name: CHAT_ID, value: "-1003984393379" } # "Skirmshop ES OP"
+                - { name: THREAD_ID, value: "11116" } # "Katálogo RAG Propuestas"
                 - { name: APP_LINK, value: "https://skirmshop.e-dani.com/app/content" }
               volumeMounts:
                 - { name: sql, mountPath: /sql, readOnly: true }
