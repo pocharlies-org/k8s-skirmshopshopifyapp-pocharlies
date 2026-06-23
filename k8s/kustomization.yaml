@@ -14,6 +14,7 @@ resources:
   - cronjob-proposals-digest.yaml
   - cronjob-reconcile-summary.yaml
   - cronjob-picqer-price-sync.yaml
+  - cronjob-nl-llm-matcher.yaml
 
 namePrefix: rag-
 
@@ -30,6 +31,9 @@ configMapGenerator:
   - name: picqer-price-sync-script
     files:
       - picqer-price-sync.js
+  - name: nl-llm-matcher-script
+    files:
+      - nl-llm-matcher.js
 
 images:
   - name: shopify-app

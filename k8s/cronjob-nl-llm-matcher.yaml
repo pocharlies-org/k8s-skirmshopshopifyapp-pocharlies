@@ -1,0 +1,53 @@
+# Daily NL⇄ES LLM MATCHER → brain. Links remaining ES products to their NL
+# counterpart one-by-one with a strict 2-stage LLM judge (100%-identical gate) and
+# writes the NL price (ChannelOffer) only on a confirmed match; non-matches get an
+# NL_NOMATCH marker so they're skipped next run (resumable). Self-contained:
+# node:20 runs the script from the generated ConfigMap; no app image rebuild.
+# Complements cronjob-picqer-price-sync (deterministic supplier-code link).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nl-llm-matcher
+spec:
+  suspend: false
+  schedule: "0 5 * * *" # daily 05:00 (Europe/Madrid) — after picqer-price-sync (04:30)
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3300 # batch of LLM calls + Picqer/storefront/brain pagination
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: nl-llm-matcher
+              image: node:20-alpine
+              command: ["node", "/script/nl-llm-matcher.js"]
+              env:
+                - { name: APPLY, value: "1" }
+                - { name: BATCH, value: "200" }
+                - { name: MODEL, value: "tooling" }
+                - { name: MIN_CONF, value: "0.9" }
+                - { name: BRAIN_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
+                - { name: LITELLM_URL, value: "http://litellm.litellm.svc.cluster.local:4000" }
+                - name: BRAIN_API_KEY
+                  valueFrom: { secretKeyRef: { name: rag-secrets, key: BRAIN_API_KEY } }
+                - name: LITELLM_KEY
+                  valueFrom: { secretKeyRef: { name: rag-litellm-key, key: LITELLM_KEY } }
+                - name: PICQER_API_KEY
+                  valueFrom: { secretKeyRef: { name: collections-tree-secrets, key: PICQER_API_KEY } }
+                - name: PICQER_SUBDOMAIN
+                  valueFrom: { secretKeyRef: { name: collections-tree-secrets, key: PICQER_SUBDOMAIN } }
+              volumeMounts:
+                - { name: script, mountPath: /script }
+              resources:
+                requests: { cpu: 150m, memory: 512Mi }
+                limits: { memory: 1Gi }
+          volumes:
+            - name: script
+              configMap:
+                name: nl-llm-matcher-script
