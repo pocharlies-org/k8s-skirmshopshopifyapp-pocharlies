@@ -22,6 +22,10 @@ const MODEL=process.env.MODEL||"tooling"; const MIN_CONF=Number(process.env.MIN_
 const TOPK=Number(process.env.TOPK||6); const BATCH=Number(process.env.BATCH||120);
 const BRAND=(process.env.BRAND||"").trim().toLowerCase(); const LIMIT=Number(process.env.LIMIT||0);
 const APPLY=process.env.APPLY==="1";
+const RATIO_MIN=Number(process.env.RATIO_MIN||0.4); const RATIO_MAX=Number(process.env.RATIO_MAX||2.5);
+const FX_GBP_EUR=Number(process.env.FX_GBP_EUR||1.17);
+const GBP_DOMAINS=new Set(["redwolfairsoft.com"]);
+const isGbp=d=>{const x=norm(d);return x.endsWith(".co.uk")||x.endsWith(".uk")||GBP_DOMAINS.has(x);};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function rfetch(url,opts={},tries=5){let last;for(let a=0;a<tries;a++){try{const r=await fetch(url,opts);if(r.status===429||r.status>=500){last=new Error("HTTP "+r.status);await sleep(1500*(a+1));continue;}return r;}catch(e){last=e;await sleep(1500*(a+1));}}throw last||new Error("rfetch failed "+url);}
 const norm=s=>(s||"").toString().trim().toLowerCase();
@@ -74,7 +78,7 @@ function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try
     let pick=null;
     try{
       const out=await llm([
-        {role:"system",content:"You match identical airsoft/tactical products between our Spanish store and a competitor store. Competitor titles may be in English or German. Two products MATCH only if they are the EXACT same product: same brand, same model, same variant (colour/size/length/material/edition/version/capacity). Different colour, size, length, version, capacity or bundle = NOT a match. When unsure, do NOT match. Reply ONLY with JSON."},
+        {role:"system",content:"You match identical airsoft/tactical products between our Spanish store and a competitor store. Competitor titles may be in English or German. Two products MATCH only if they are the EXACT same product: same brand, same model, same variant (colour/size/length/material/edition/version/capacity). Different colour, size, length, version, capacity or bundle = NOT a match. A single part is NOT the same as a SET/KIT that contains it. A part is NOT the same as a different part that merely shares a word (hammer != hammer housing; loading nozzle != nozzle valve; handguard rail != scope/top rail; receiver spacer != barrel spacer). A material change (aluminium vs plastic/polymer) is NOT a match. Different product LINE/series names are NOT a match (e.g. Macaron != Super Macaron; MCMR != Raider; Crazy Jet != Precision; Mr.Hop != Wonder != Decepticon != Cool Shot). REGULAR != BIO BBs. Quantities/pack sizes must match (1000rds != 1kg; single != 3-pack). When unsure, do NOT match. Reply ONLY with JSON."},
         {role:"user",content:`${esBlock}\n\nCOMPETITOR CANDIDATES:\n${candBlock}\n\nReturn JSON {"match_index": <index of the exact same product, or null>, "confidence": <0..1>, "reason": "<short>"}.`}
       ]);
       pick=parseJson(out);
@@ -86,15 +90,22 @@ function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try
     let c2=null;
     try{
       const out2=await llm([
-        {role:"system",content:"Answer ONLY JSON. Two airsoft/tactical products are the SAME only if identical brand+model+variant (colour/size/length/version/capacity/edition). Be strict: any difference = not same."},
+        {role:"system",content:"Answer ONLY JSON. Two airsoft/tactical products are the SAME only if identical brand+model+variant (colour/size/length/version/capacity/edition). Be strict: any difference = not same. A single part is NOT the same as a SET/KIT that contains it. A part is NOT the same as a different part that merely shares a word (hammer != hammer housing; loading nozzle != nozzle valve; handguard rail != scope/top rail; receiver spacer != barrel spacer). A material change (aluminium vs plastic/polymer) is NOT a match. Different product LINE/series names are NOT a match (e.g. Macaron != Super Macaron; MCMR != Raider; Crazy Jet != Precision; Mr.Hop != Wonder != Decepticon != Cool Shot). REGULAR != BIO BBs. Quantities/pack sizes must match (1000rds != 1kg; single != 3-pack)."},
         {role:"user",content:`A (ours): "${t.title}" vendor="${t.vendor}"\nB (competitor): "${cand.title}" brand="${cand.brand}"\nAre A and B the exact same product? Return {"same": true|false, "confidence":0..1, "reason":"<short>"}.`}
       ],150);
       c2=parseJson(out2);
     }catch(e){return {kind:"nomatch", decision:{p:t.id,result:"llm-error-2",err:e.message}, marker:mk(t)};}
-    if(c2&&c2.same===true&&Number(c2.confidence)>=MIN_CONF)
+    if(c2&&c2.same===true&&Number(c2.confidence)>=MIN_CONF){
+      // Price-ratio sanity gate: a true 1:1 match should be in the same ballpark.
+      // GBP-priced stores hold the native number; convert to EUR before comparing.
+      const comp_eur=isGbp(cand.domain)?Number(cand.price)*FX_GBP_EUR:Number(cand.price);
+      const ratio=(comp_eur>0)?(Number(t.es_price)/comp_eur):null;
+      if(ratio!=null&&Number(c2.confidence)!==1.0&&(ratio>RATIO_MAX||ratio<RATIO_MIN))
+        return {kind:"nomatch", decision:{p:t.id,title:t.title,comp:cand.id,comp_title:cand.title,price:cand.price,domain:cand.domain,conf:c2.confidence,result:"reject-price-ratio",ratio:Number(ratio.toFixed(3)),reason:c2.reason}, marker:mk(t)};
       return {kind:"match",
         doc:{source_id:`match:${t.id}:${cand.id}`,content:`PRODUCT_MATCH ${t.title} == ${cand.title} (${cand.domain})`,metadata:{source:"competitor_match",our_product_handle:t.id,competitor_id:cand.id,confidence:Number(c2.confidence),match_method:"llm",domain:cand.domain,competitor_price:Number(cand.price)}},
         decision:{p:t.id,title:t.title,comp:cand.id,comp_title:cand.title,price:cand.price,domain:cand.domain,conf:c2.confidence,result:"MATCH",reason:c2.reason}};
+    }
     return {kind:"nomatch", decision:{p:t.id,title:t.title,cand:cand.title,result:"reject-2",conf:c2&&c2.confidence,reason:c2&&c2.reason}, marker:mk(t)};
   }
 
@@ -111,5 +122,11 @@ function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try
   for(const d of decisions) if(d.result==="MATCH") console.log(JSON.stringify(d));
   if(!APPLY){console.log(`\nDRY — would push ${matched} PRODUCT_MATCH + ${nomatch+nocand} markers`); return;}
   console.log(`\nAPPLIED (incremental): ${matched} matches + ${nomatch+nocand} markers pushed.`);
+  // Enforce 1:1 uniqueness (one competitor -> one product) after the full run.
+  try{
+    const pr=await rfetch(`${BRAIN}/instances/skirmshop/prices/competitor-prune`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({})});
+    if(!pr.ok)throw new Error("HTTP "+pr.status+": "+(await pr.text()).slice(0,200));
+    console.log("prune: "+JSON.stringify(await pr.json()));
+  }catch(err){console.log("prune skipped: "+err.message);}
   console.log("DONE");
 })().catch(e=>{console.error("FATAL",e.message);process.exit(1)});
