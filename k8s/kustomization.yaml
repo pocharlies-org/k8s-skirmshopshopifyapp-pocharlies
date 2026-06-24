@@ -15,6 +15,7 @@ resources:
   - cronjob-reconcile-summary.yaml
   - cronjob-picqer-price-sync.yaml
   - cronjob-nl-llm-matcher.yaml
+  - cronjob-competitor-llm-matcher.yaml
 
 namePrefix: rag-
 
@@ -34,11 +35,14 @@ configMapGenerator:
   - name: nl-llm-matcher-script
     files:
       - nl-llm-matcher.js
+  - name: competitor-llm-matcher-script
+    files:
+      - competitor-llm-matcher.js
 
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: v1.5.68
+    newTag: v1.5.69
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
