@@ -26,6 +26,12 @@ const BRAIN=(process.env.POCHARLIES_RAG_URL||process.env.BRAIN_URL||"http://skir
 const BKEY=process.env.BRAIN_API_KEY||""; const PKEY=process.env.PICQER_API_KEY||""; const SUB=process.env.PICQER_SUBDOMAIN||"skirmshop";
 const PBASE=`https://${SUB}.picqer.com/api/v1`; const PAUTH="Basic "+Buffer.from(PKEY+":X").toString("base64");
 const APPLY=process.env.APPLY==="1"; const CHUNK=100;
+// Cost plausibility guard: a Shopify SKU must resolve to the SAME product in Picqer.
+// If the Picqer net price is wildly off our ES ex-VAT price (e.g. a 495€ rifle whose
+// productcode collides with a 32€ magazine SKU), the SKU maps to a DIFFERENT product —
+// skip the cost rather than stamp a wrong one (the dominant wrong-cost source on the
+// Prices tab). Env-tunable band; 0 disables.
+const COST_PRICE_MINR=Number(process.env.COST_PRICE_MINR||0.15); const COST_PRICE_MAXR=Number(process.env.COST_PRICE_MAXR||6);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms)); const norm=s=>(s||"").toString().trim().toLowerCase();
 async function jget(url,opts={}){ let last; for(let a=0;a<6;a++){ let r; try{ r=await fetch(url,opts); }catch(e){ last=e; await sleep(1500*(a+1)); continue; } /* retry transient network errors ("fetch failed") */ if(r.status===429||r.status>=500){ last=new Error("HTTP "+r.status+" "+url); await sleep(1500*(a+1)); continue; } if(!r.ok) throw new Error("HTTP "+r.status+" "+url); return r.json(); } throw last||new Error("retries exhausted "+url); }
 async function push(adapter,documents){ let last; for(let a=0;a<6;a++){ let r; try{ r=await fetch(`${BRAIN}/instances/skirmshop/push-ingest`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json","X-API-Key":BKEY},body:JSON.stringify({adapter,documents})}); }catch(e){ last=e; await sleep(1500*(a+1)); continue; } /* retry transient network errors (e.g. "fetch failed") */ if(r.status===429||r.status>=500){ last=new Error("push "+adapter+" HTTP "+r.status); await sleep(1500*(a+1)); continue; } const t=await r.text(); if(!r.ok) throw new Error("push "+adapter+" HTTP "+r.status+": "+t.slice(0,200)); /* 4xx = fatal, no retry */ return JSON.parse(t); } throw last; }
@@ -40,7 +46,7 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
   const isOtherChan=c=>/^(sp-|uk-?|us-?)/i.test(c);
   for(;;){ const rows=await jget(`${PBASE}/products?offset=${poff}`,{headers:{Authorization:PAUTH,Accept:"application/json","User-Agent":"backfill"}}); if(!rows.length)break;
     for(const p of rows){ const c=Number(p.fixedstockprice)||0; const supRaw=String(p.productcode_supplier||"").trim(); const code=norm(p.productcode); const price=Number(p.price)||0;
-      pq.set(code,{cost:c, sup:supRaw});
+      pq.set(code,{cost:c, sup:supRaw, price});
       const sk=norm(supRaw); if(sk){ if(!bySup.has(sk))bySup.set(sk,[]); bySup.get(sk).push(code);
         // NL net = the cheapest non-ES/UK/US Picqer sibling price (ex-VAT) under this supplier.
         if(!isOtherChan(code) && price>0){ if(!supNl.has(sk)||price<supNl.get(sk)) supNl.set(sk,price); } } }
@@ -50,15 +56,24 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
   // NL net resolver: the cheapest NL-sibling Picqer price (ex-VAT) under the same supplier.
   function nlPriceFor(esSku, sup){ const sk=norm(sup); return (sk && supNl.has(sk)) ? supNl.get(sk) : null; }
 
-  const costDocs=[], nlDocs=[]; let nlMatched=0;
+  const costDocs=[], nlDocs=[]; let nlMatched=0, costSkippedMismatch=0;
   for(const [sku, info] of es){
     const b=brain.get(info.handle); if(!b) continue;
-    const e=pq.get(sku); const cost=e&&e.cost; const sup=e&&e.sup;
+    const e=pq.get(sku); const cost=e&&e.cost; const sup=e&&e.sup; const pqPrice=e&&e.price;
     // COST gap-fill — merge into driver node via productcode_supplier.
     if(cost>0 && b.cost==null && b.es!=null && b.es>0){
-      const key=(sup||info.skuOrig);
-      costDocs.push({ source_id:`manufacturer:${key}`, content:`Picqer cost for ${key}: ${cost} EUR`,
-        metadata:{ source:"manufacturer", sku:key, cost_eur:cost, our_product_handle:info.handle } });
+      // Plausibility guard: skip when the Picqer product the SKU resolves to is clearly
+      // a DIFFERENT product (its net price is wildly off our ES ex-VAT price) — a
+      // Shopify↔Picqer SKU collision (e.g. a magazine SKU resolving to a 495€ rifle).
+      const esEx = b.es / 1.21;
+      const mismatch = pqPrice > 0 && esEx > 0 &&
+        (pqPrice > esEx * COST_PRICE_MAXR || pqPrice < esEx * COST_PRICE_MINR);
+      if(mismatch){ costSkippedMismatch++; }
+      else {
+        const key=(sup||info.skuOrig);
+        costDocs.push({ source_id:`manufacturer:${key}`, content:`Picqer cost for ${key}: ${cost} EUR`,
+          metadata:{ source:"manufacturer", sku:key, cost_eur:cost, our_product_handle:info.handle } });
+      }
     }
     // NL REFRESH-ON-CHANGE from the Picqer net (ex-VAT): push only when the net is new
     // or differs from the brain's current nl_price_raw — keeps self-heal, light nightly load.
@@ -68,7 +83,7 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
         metadata:{ source:"channel_offer", channel:"NL", sku:info.skuOrig, price:Number(nlp), currency:"EUR", vat_incl:false, our_product_handle:info.handle, content_hash:`picqer-nl-net:${nlp}` } });
     }
   }
-  console.log(`candidates: cost=${costDocs.length} nl=${nlDocs.length} (nl to-update=${nlMatched})`);
+  console.log(`candidates: cost=${costDocs.length} nl=${nlDocs.length} (nl to-update=${nlMatched}) cost-skipped(sku-mismatch)=${costSkippedMismatch}`);
   if(!APPLY){ console.log("DRY. sample nl:",JSON.stringify(nlDocs.slice(0,4).map(d=>d.metadata))); return; }
   let cIng=0,nIng=0;
   for(const c of chunk(costDocs,CHUNK)){ const r=await push("manufacturer",c); cIng+=r.chunks_ingested??r.documents_received??0; process.stdout.write("c"); }
