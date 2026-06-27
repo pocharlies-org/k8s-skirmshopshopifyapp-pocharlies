@@ -45,7 +45,13 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
   const pq=new Map(); const bySup=new Map(); const supNl=new Map(); let poff=0;
   const isOtherChan=c=>/^(sp-|uk-?|us-?)/i.test(c);
   for(;;){ const rows=await jget(`${PBASE}/products?offset=${poff}`,{headers:{Authorization:PAUTH,Accept:"application/json","User-Agent":"backfill"}}); if(!rows.length)break;
-    for(const p of rows){ const c=Number(p.fixedstockprice)||0; const supRaw=String(p.productcode_supplier||"").trim(); const code=norm(p.productcode); const price=Number(p.price)||0;
+    for(const p of rows){
+      // DISCONTINUED guard: Picqer /products returns INACTIVE products too (active flag).
+      // A discontinued product (active=false) must never be a cost/NL source — its
+      // productcode/productcode_supplier could collide with a live SKU and stamp a wrong
+      // cost (root cause of the SP-SBA-SSS-50 MDR-X bug). Source of truth = Picqer active.
+      if(p.active===false) continue;
+      const c=Number(p.fixedstockprice)||0; const supRaw=String(p.productcode_supplier||"").trim(); const code=norm(p.productcode); const price=Number(p.price)||0;
       pq.set(code,{cost:c, sup:supRaw, price});
       const sk=norm(supRaw); if(sk){ if(!bySup.has(sk))bySup.set(sk,[]); bySup.get(sk).push(code);
         // NL net = the cheapest non-ES/UK/US Picqer sibling price (ex-VAT) under this supplier.
