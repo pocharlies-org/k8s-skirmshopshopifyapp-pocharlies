@@ -46,10 +46,11 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
   const isOtherChan=c=>/^(sp-|uk-?|us-?)/i.test(c);
   for(;;){ const rows=await jget(`${PBASE}/products?offset=${poff}`,{headers:{Authorization:PAUTH,Accept:"application/json","User-Agent":"backfill"}}); if(!rows.length)break;
     for(const p of rows){
-      // DISCONTINUED guard: Picqer /products returns INACTIVE products too (active flag).
-      // A discontinued product (active=false) must never be a cost/NL source — its
-      // productcode/productcode_supplier could collide with a live SKU and stamp a wrong
-      // cost (root cause of the SP-SBA-SSS-50 MDR-X bug). Source of truth = Picqer active.
+      // DISCONTINUED guard (defensive): never let an inactive product be a cost/NL
+      // source (SP-SBA-SSS-50 MDR-X bug: an inactive code collided with a live SKU →
+      // wrong cost). NOTE (verified 2026-06-28): Picqer /products is ACTIVE-ONLY by
+      // default, so deactivating already DROPS the product from these rows — this
+      // guard is belt-and-suspenders in case the fetch ever includes ?inactive=true.
       if(p.active===false) continue;
       const c=Number(p.fixedstockprice)||0; const supRaw=String(p.productcode_supplier||"").trim(); const code=norm(p.productcode); const price=Number(p.price)||0;
       pq.set(code,{cost:c, sup:supRaw, price});
