@@ -11,7 +11,7 @@
 # shared volume; the main container (curlimages/curl) POSTs it. Validated E2E
 # 2026-06-21 (live DB → Telegram General, message_id 34613).
 #
-# Destination = Skirmshop ES OP / Katálogo RAG Propuestas (thread 11116),
+# Destination = Skirmshop ES OP / Katálogo RAG Propuestas (thread 18203; el 11116 original fue borrado del grupo),
 # matching cronjob-health-report.yaml. Keep catalog review noise out of the
 # Synapse SRE monitor group.
 #
@@ -133,7 +133,7 @@ spec:
                       name: shared-postgres-app
                       key: password
                 - { name: CHAT_ID, value: "-1003984393379" } # "Skirmshop ES OP"
-                - { name: THREAD_ID, value: "11116" } # "Katálogo RAG Propuestas"
+                - { name: THREAD_ID, value: "18203" } # "Katálogo RAG Propuestas"
                 - { name: APP_LINK, value: "https://skirmshop.e-dani.com/app/content" }
               volumeMounts:
                 - { name: sql, mountPath: /sql, readOnly: true }

@@ -40,7 +40,7 @@ spec:
                 # Report → Skirmshop ES OP / Katálogo RAG Propuestas. This CronJob
                 # remains suspended; do not use the Synapse SRE monitor for catalog reports.
                 - { name: TELEGRAM_CHAT_ID, value: "-1003984393379" }
-                - { name: TELEGRAM_THREAD_ID, value: "11116" }
+                - { name: TELEGRAM_THREAD_ID, value: "18203" }
               resources:
                 requests:
                   cpu: 100m

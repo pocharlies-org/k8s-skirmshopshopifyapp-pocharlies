@@ -77,7 +77,7 @@ spec:
                 # Digest → Skirmshop ES OP / Katálogo RAG Propuestas. Keep business
                 # catalog reports out of the Synapse SRE monitor.
                 - { name: TELEGRAM_CHAT_ID, value: "-1003984393379" }
-                - { name: TELEGRAM_THREAD_ID, value: "11116" }
+                - { name: TELEGRAM_THREAD_ID, value: "18203" }
                 # Signal policy. v1.5.54 gates part_category gap-fills to PART products
                 # in code (diffFacets), so part_category is safe to re-enable: genuine
                 # part fills (uppers/chassis/kits) surface, whole-gun false positives are
