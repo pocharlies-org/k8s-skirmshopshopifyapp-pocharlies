@@ -1,0 +1,57 @@
+# Daily provider_sourcing FRESHNESS BACKFILL (F9a). Re-stamps the
+# product_creator.provider_sourcing metafield -- a FAITHFUL (supplier,sku) mirror of
+# the SupplierOffer/CatalogProduct tables -- on every matched product, so the F9
+# prefer-if-non-empty readers (where-to-buy / margins) never drift from the actively
+# re-scraped provider tables during the additive soak (Synapse writes the tables, not
+# the metafield). Idempotent upsert, best-effort per product, admin-only metafield
+# (NEVER storefront). Entry point = the esbuild bundle build/backfill-provider-sourcing.cjs
+# (Dockerfile). Runs at 04:30 Europe/Madrid, after the nightly scrape cycle settles.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: provider-sourcing-backfill
+spec:
+  suspend: false
+  schedule: "30 4 * * *" # daily 04:30
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1200 # ~7 min typical for ~1058 products @ concurrency 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: provider-sourcing-backfill
+              image: shopify-app # rewritten by kustomize images: -> harbor …skirmshopshopifyapp:<tag>
+              command: ["node", "build/backfill-provider-sourcing.cjs", "--concurrency", "2"]
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # SHOPIFY_STORE + SHOPIFY_ACCESS_TOKEN (Admin API); DATABASE_URL host is BOGUS, overridden below
+              env:
+                # DB connection -- MUST mirror the base Deployment / reconcile-summary
+                # override: rag-secrets' DATABASE_URL points at a non-existent host
+                # (shared-postgres, ENOTFOUND); the real CNPG endpoint is built here
+                # from shared-postgres-app. DB_USER/DB_PASSWORD must precede
+                # DATABASE_URL for $(VAR) expansion.
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: username
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: shared-postgres-app
+                      key: password
+                - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop" }
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
