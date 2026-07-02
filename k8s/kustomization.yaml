@@ -65,6 +65,9 @@ patches:
                 secret: { secretName: sii-certificate }
             containers:
               - name: app
+                command: ["/bin/sh", "-c"]
+                args:
+                  - npx prisma migrate deploy && exec ./node_modules/.bin/remix-serve ./build/server/index.js
                 env:
                   # AUTH INVARIANT: must equal the public URL exactly (root, no prefix).
                   - { name: SHOPIFY_APP_URL, value: "https://skirmshop.e-dani.com" }
