@@ -26,14 +26,15 @@
  * Non-matches get an NL_NOMATCH marker so they are skipped on the next run
  * (resumable). DRY=1 logs decisions without writing. APPLY=1 writes.
  *
- * Env: BRAIN_URL, BRAIN_API_KEY, LITELLM_KEY, LITELLM_URL(opt), PICQER_API_KEY,
+ * Env: BRAIN_URL, BRAIN_WRITE_URL(opt), BRAIN_API_KEY, LITELLM_KEY, LITELLM_URL(opt), PICQER_API_KEY,
  *      PICQER_SUBDOMAIN, BATCH(opt, default 50), TOPK(opt, 6), MODEL(opt, tooling),
- *      MIN_CONF(opt, 0.9), FETCH_TIMEOUT_MS(opt, default 10000),
- *      FETCH_ATTEMPTS(opt, default 3), RUN_BUDGET_MS(opt, default 2700000),
+ *      MIN_CONF(opt, 0.9), FETCH_TIMEOUT_MS(opt, default 30000),
+ *      FETCH_ATTEMPTS(opt, default 2), RUN_BUDGET_MS(opt, default 2700000),
  *      COMPLETION_RESERVE_MS(opt, default 600000), BRAIN_PUSH_CHUNK(opt, default 25),
  *      MAX_LLM_ERRORS(opt, default 2), APPLY(=1 to write).
  */
 const BRAIN=(process.env.BRAIN_URL||process.env.POCHARLIES_RAG_URL||"http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local").replace(/\/+$/,"");
+const BRAIN_WRITE=(process.env.BRAIN_WRITE_URL||BRAIN).replace(/\/+$/,"");
 const BKEY=process.env.BRAIN_API_KEY||"";
 const LURL=(process.env.LITELLM_URL||"http://litellm.litellm.svc.cluster.local:4000").replace(/\/+$/,"");
 const LKEY=process.env.LITELLM_KEY||"";
@@ -41,8 +42,8 @@ const PKEY=process.env.PICQER_API_KEY||""; const SUB=process.env.PICQER_SUBDOMAI
 const PBASE=`https://${SUB}.picqer.com/api/v1`; const PAUTH="Basic "+Buffer.from(PKEY+":X").toString("base64");
 const BATCH=Number(process.env.BATCH||50); const TOPK=Number(process.env.TOPK||6);
 const MODEL=process.env.MODEL||"tooling"; const MIN_CONF=Number(process.env.MIN_CONF||0.9);
-const FETCH_TIMEOUT_MS=Math.max(1000,Number(process.env.FETCH_TIMEOUT_MS||10000));
-const FETCH_ATTEMPTS=Math.max(1,Number(process.env.FETCH_ATTEMPTS||3));
+const FETCH_TIMEOUT_MS=Math.max(1000,Number(process.env.FETCH_TIMEOUT_MS||30000));
+const FETCH_ATTEMPTS=Math.max(1,Number(process.env.FETCH_ATTEMPTS||2));
 const RUN_BUDGET_MS=Math.max(60000,Number(process.env.RUN_BUDGET_MS||2700000));
 const COMPLETION_RESERVE_MS=Math.max(1000,Number(process.env.COMPLETION_RESERVE_MS||600000));
 const BRAIN_PUSH_CHUNK=Math.max(1,Number(process.env.BRAIN_PUSH_CHUNK||25));
@@ -62,14 +63,15 @@ async function rfetch(url,opts={},tries=FETCH_ATTEMPTS){
     const timeoutMs=Math.min(FETCH_TIMEOUT_MS,remaining);
     const timeout=setTimeout(()=>controller.abort(new Error(`timeout after ${timeoutMs}ms`)),timeoutMs);
     try{
-      const r=await fetch(url,{...opts,signal:controller.signal});
-      if(r.status===429||r.status>=500){
-        last=new Error(`HTTP ${r.status} ${target}`);
-        console.warn(`retryable response target=${target} attempt=${a+1}/${tries} status=${r.status}`);
+      const response=await fetch(url,{...opts,signal:controller.signal});
+      if(response.status===429||response.status>=500){
+        last=new Error(`HTTP ${response.status} ${target}`);
+        console.warn(`retryable response target=${target} attempt=${a+1}/${tries} status=${response.status}`);
+        await response.body?.cancel();
         await sleep(Math.min(1500*(a+1),Math.max(0,runRemainingMs())));
         continue;
       }
-      return r;
+      return {status:response.status,body:await response.text()};
     }catch(e){
       last=new Error(`request ${target} attempt=${a+1}/${tries}: ${e.message}`);
       console.warn(last.message);
@@ -84,22 +86,22 @@ const norm=s=>(s||"").toString().trim().toLowerCase();
 const STOP=new Set("the a an of for with and or to in on at by de la el los las para con sin y o un una pcs set kit new para".split(/\s+/));
 function toks(s){return [...new Set((s||"").toLowerCase().replace(/<[^>]+>/g," ").replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(t=>t.length>1&&!STOP.has(t)))];}
 function stripHtml(s){return (s||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim().slice(0,600);}
-async function jget(url,opts={}){const r=await rfetch(url,opts);if(!r.ok)throw new Error("HTTP "+r.status+" "+url);return r.json();}
-async function cypher(query){const r=await rfetch(`${BRAIN}/graph/skirmshop/cypher`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({query,limit:100000})});if(!r.ok)throw new Error("cypher HTTP "+r.status+": "+(await r.text()).slice(0,200));const j=await r.json();return j.rows||j.result||j.data||j;}
+async function jget(url,opts={}){const r=await rfetch(url,opts);if(r.status<200||r.status>=300)throw new Error("HTTP "+r.status+" "+url);return JSON.parse(r.body);}
+async function cypher(query){const r=await rfetch(`${BRAIN}/graph/skirmshop/cypher`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({query,limit:100000})});if(r.status<200||r.status>=300)throw new Error("cypher HTTP "+r.status+": "+r.body.slice(0,200));const j=JSON.parse(r.body);return j.rows||j.result||j.data||j;}
 async function pushBrain(adapter,documents){
   for(let start=0;start<documents.length;start+=BRAIN_PUSH_CHUNK){
     const chunk=documents.slice(start,start+BRAIN_PUSH_CHUNK);
-    const r=await rfetch(`${BRAIN}/instances/skirmshop/push-ingest`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({adapter,documents:chunk})});
-    if(!r.ok)throw new Error("push HTTP "+r.status+": "+(await r.text()).slice(0,200));
+    const r=await rfetch(`${BRAIN_WRITE}/instances/skirmshop/push-ingest`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({adapter,documents:chunk})});
+    if(r.status<200||r.status>=300)throw new Error("push HTTP "+r.status+": "+r.body.slice(0,200));
     console.log(`brain_push adapter=${adapter} sent=${chunk.length} offset=${start}`);
   }
 }
 async function storeMap(host){const m=new Map();for(let p=1;p<=80;p++){const j=await jget(`https://${host}/products.json?limit=250&page=${p}`,{headers:{Accept:"application/json"}});const ps=j.products||[];if(!ps.length)break;for(const pr of ps){const prim=(pr.variants||[])[0]||{};const sku=norm(prim.sku);m.set(pr.handle,{handle:pr.handle,title:pr.title||"",body:stripHtml(pr.body_html),vendor:pr.vendor||"",sku,price:Number(prim.price)||null});}if(ps.length<250)break;await sleep(450);}return m;}
-async function llm(messages,max_tokens=300){const r=await rfetch(`${LURL}/v1/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+LKEY},body:JSON.stringify({model:MODEL,messages,temperature:0,max_tokens})});if(!r.ok)throw new Error("llm HTTP "+r.status+": "+(await r.text()).slice(0,150));const j=await r.json();return (j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||"";}
+async function llm(messages,max_tokens=300){const r=await rfetch(`${LURL}/v1/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+LKEY},body:JSON.stringify({model:MODEL,messages,temperature:0,max_tokens})});if(r.status<200||r.status>=300)throw new Error("llm HTTP "+r.status+": "+r.body.slice(0,150));const j=JSON.parse(r.body);return (j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||"";}
 function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try{return JSON.parse(m[0]);}catch{return null;}}
 
 (async()=>{
-  console.log(`nl-llm-matcher start APPLY=${APPLY} BATCH=${BATCH} TOPK=${TOPK} MODEL=${MODEL} MIN_CONF=${MIN_CONF} FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS} FETCH_ATTEMPTS=${FETCH_ATTEMPTS} RUN_BUDGET_MS=${RUN_BUDGET_MS} COMPLETION_RESERVE_MS=${COMPLETION_RESERVE_MS} BRAIN_PUSH_CHUNK=${BRAIN_PUSH_CHUNK}`);
+  console.log(`nl-llm-matcher start APPLY=${APPLY} BATCH=${BATCH} TOPK=${TOPK} MODEL=${MODEL} MIN_CONF=${MIN_CONF} FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS} FETCH_ATTEMPTS=${FETCH_ATTEMPTS} RUN_BUDGET_MS=${RUN_BUDGET_MS} COMPLETION_RESERVE_MS=${COMPLETION_RESERVE_MS} BRAIN_PUSH_CHUNK=${BRAIN_PUSH_CHUNK} BRAIN_WRITE_HOST=${new URL(BRAIN_WRITE).host}`);
   // 1. NL storefront candidates + price
   const nlMap=await storeMap("skirmshop.nl"); const nl=[...nlMap.values()];
   const esMap=await storeMap("skirmshop.es");
