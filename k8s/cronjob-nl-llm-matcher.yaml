@@ -19,7 +19,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 3300 # batch of LLM calls + Picqer/storefront/brain pagination
+      activeDeadlineSeconds: 3300 # bounded batch stays below the 55-minute execution window
       template:
         spec:
           restartPolicy: Never
@@ -29,7 +29,9 @@ spec:
               command: ["node", "/script/nl-llm-matcher.js"]
               env:
                 - { name: APPLY, value: "1" }
-                - { name: BATCH, value: "200" }
+                - { name: BATCH, value: "50" }
+                - { name: FETCH_TIMEOUT_MS, value: "30000" }
+                - { name: BRAIN_PUSH_CHUNK, value: "25" }
                 - { name: MODEL, value: "tooling" }
                 - { name: MIN_CONF, value: "0.9" }
                 - { name: BRAIN_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
