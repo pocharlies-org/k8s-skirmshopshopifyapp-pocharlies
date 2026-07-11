@@ -26,14 +26,15 @@
  * Non-matches get an NL_NOMATCH marker so they are skipped on the next run
  * (resumable). DRY=1 logs decisions without writing. APPLY=1 writes.
  *
- * Env: BRAIN_URL, BRAIN_API_KEY, LITELLM_KEY, LITELLM_URL(opt), PICQER_API_KEY,
+ * Env: BRAIN_URL, BRAIN_WRITE_URL(opt), BRAIN_API_KEY, LITELLM_KEY, LITELLM_URL(opt), PICQER_API_KEY,
  *      PICQER_SUBDOMAIN, BATCH(opt, default 50), TOPK(opt, 6), MODEL(opt, tooling),
- *      MIN_CONF(opt, 0.9), FETCH_TIMEOUT_MS(opt, default 10000),
- *      FETCH_ATTEMPTS(opt, default 3), RUN_BUDGET_MS(opt, default 2700000),
+ *      MIN_CONF(opt, 0.9), FETCH_TIMEOUT_MS(opt, default 30000),
+ *      FETCH_ATTEMPTS(opt, default 2), RUN_BUDGET_MS(opt, default 2700000),
  *      COMPLETION_RESERVE_MS(opt, default 600000), BRAIN_PUSH_CHUNK(opt, default 25),
  *      MAX_LLM_ERRORS(opt, default 2), APPLY(=1 to write).
  */
 const BRAIN=(process.env.BRAIN_URL||process.env.POCHARLIES_RAG_URL||"http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local").replace(/\/+$/,"");
+const BRAIN_WRITE=(process.env.BRAIN_WRITE_URL||BRAIN).replace(/\/+$/,"");
 const BKEY=process.env.BRAIN_API_KEY||"";
 const LURL=(process.env.LITELLM_URL||"http://litellm.litellm.svc.cluster.local:4000").replace(/\/+$/,"");
 const LKEY=process.env.LITELLM_KEY||"";
@@ -41,8 +42,8 @@ const PKEY=process.env.PICQER_API_KEY||""; const SUB=process.env.PICQER_SUBDOMAI
 const PBASE=`https://${SUB}.picqer.com/api/v1`; const PAUTH="Basic "+Buffer.from(PKEY+":X").toString("base64");
 const BATCH=Number(process.env.BATCH||50); const TOPK=Number(process.env.TOPK||6);
 const MODEL=process.env.MODEL||"tooling"; const MIN_CONF=Number(process.env.MIN_CONF||0.9);
-const FETCH_TIMEOUT_MS=Math.max(1000,Number(process.env.FETCH_TIMEOUT_MS||10000));
-const FETCH_ATTEMPTS=Math.max(1,Number(process.env.FETCH_ATTEMPTS||3));
+const FETCH_TIMEOUT_MS=Math.max(1000,Number(process.env.FETCH_TIMEOUT_MS||30000));
+const FETCH_ATTEMPTS=Math.max(1,Number(process.env.FETCH_ATTEMPTS||2));
 const RUN_BUDGET_MS=Math.max(60000,Number(process.env.RUN_BUDGET_MS||2700000));
 const COMPLETION_RESERVE_MS=Math.max(1000,Number(process.env.COMPLETION_RESERVE_MS||600000));
 const BRAIN_PUSH_CHUNK=Math.max(1,Number(process.env.BRAIN_PUSH_CHUNK||25));
@@ -89,7 +90,7 @@ async function cypher(query){const r=await rfetch(`${BRAIN}/graph/skirmshop/cyph
 async function pushBrain(adapter,documents){
   for(let start=0;start<documents.length;start+=BRAIN_PUSH_CHUNK){
     const chunk=documents.slice(start,start+BRAIN_PUSH_CHUNK);
-    const r=await rfetch(`${BRAIN}/instances/skirmshop/push-ingest`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({adapter,documents:chunk})});
+    const r=await rfetch(`${BRAIN_WRITE}/instances/skirmshop/push-ingest`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({adapter,documents:chunk})});
     if(!r.ok)throw new Error("push HTTP "+r.status+": "+(await r.text()).slice(0,200));
     console.log(`brain_push adapter=${adapter} sent=${chunk.length} offset=${start}`);
   }
@@ -99,7 +100,7 @@ async function llm(messages,max_tokens=300){const r=await rfetch(`${LURL}/v1/cha
 function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try{return JSON.parse(m[0]);}catch{return null;}}
 
 (async()=>{
-  console.log(`nl-llm-matcher start APPLY=${APPLY} BATCH=${BATCH} TOPK=${TOPK} MODEL=${MODEL} MIN_CONF=${MIN_CONF} FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS} FETCH_ATTEMPTS=${FETCH_ATTEMPTS} RUN_BUDGET_MS=${RUN_BUDGET_MS} COMPLETION_RESERVE_MS=${COMPLETION_RESERVE_MS} BRAIN_PUSH_CHUNK=${BRAIN_PUSH_CHUNK}`);
+  console.log(`nl-llm-matcher start APPLY=${APPLY} BATCH=${BATCH} TOPK=${TOPK} MODEL=${MODEL} MIN_CONF=${MIN_CONF} FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS} FETCH_ATTEMPTS=${FETCH_ATTEMPTS} RUN_BUDGET_MS=${RUN_BUDGET_MS} COMPLETION_RESERVE_MS=${COMPLETION_RESERVE_MS} BRAIN_PUSH_CHUNK=${BRAIN_PUSH_CHUNK} BRAIN_WRITE_HOST=${new URL(BRAIN_WRITE).host}`);
   // 1. NL storefront candidates + price
   const nlMap=await storeMap("skirmshop.nl"); const nl=[...nlMap.values()];
   const esMap=await storeMap("skirmshop.es");
