@@ -28,8 +28,10 @@
  *
  * Env: BRAIN_URL, BRAIN_API_KEY, LITELLM_KEY, LITELLM_URL(opt), PICQER_API_KEY,
  *      PICQER_SUBDOMAIN, BATCH(opt, default 50), TOPK(opt, 6), MODEL(opt, tooling),
- *      MIN_CONF(opt, 0.9), FETCH_TIMEOUT_MS(opt, default 30000),
- *      BRAIN_PUSH_CHUNK(opt, default 25), APPLY(=1 to write).
+ *      MIN_CONF(opt, 0.9), FETCH_TIMEOUT_MS(opt, default 10000),
+ *      FETCH_ATTEMPTS(opt, default 3), RUN_BUDGET_MS(opt, default 2700000),
+ *      COMPLETION_RESERVE_MS(opt, default 600000), BRAIN_PUSH_CHUNK(opt, default 25),
+ *      MAX_LLM_ERRORS(opt, default 2), APPLY(=1 to write).
  */
 const BRAIN=(process.env.BRAIN_URL||process.env.POCHARLIES_RAG_URL||"http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local").replace(/\/+$/,"");
 const BKEY=process.env.BRAIN_API_KEY||"";
@@ -39,30 +41,39 @@ const PKEY=process.env.PICQER_API_KEY||""; const SUB=process.env.PICQER_SUBDOMAI
 const PBASE=`https://${SUB}.picqer.com/api/v1`; const PAUTH="Basic "+Buffer.from(PKEY+":X").toString("base64");
 const BATCH=Number(process.env.BATCH||50); const TOPK=Number(process.env.TOPK||6);
 const MODEL=process.env.MODEL||"tooling"; const MIN_CONF=Number(process.env.MIN_CONF||0.9);
-const FETCH_TIMEOUT_MS=Number(process.env.FETCH_TIMEOUT_MS||30000);
-const BRAIN_PUSH_CHUNK=Number(process.env.BRAIN_PUSH_CHUNK||25);
+const FETCH_TIMEOUT_MS=Math.max(1000,Number(process.env.FETCH_TIMEOUT_MS||10000));
+const FETCH_ATTEMPTS=Math.max(1,Number(process.env.FETCH_ATTEMPTS||3));
+const RUN_BUDGET_MS=Math.max(60000,Number(process.env.RUN_BUDGET_MS||2700000));
+const COMPLETION_RESERVE_MS=Math.max(1000,Number(process.env.COMPLETION_RESERVE_MS||600000));
+const BRAIN_PUSH_CHUNK=Math.max(1,Number(process.env.BRAIN_PUSH_CHUNK||25));
+const MAX_LLM_ERRORS=Math.max(0,Number(process.env.MAX_LLM_ERRORS||2));
 const APPLY=process.env.APPLY==="1";
+const RUN_STARTED_AT=Date.now();
+const runRemainingMs=()=>RUN_BUDGET_MS-(Date.now()-RUN_STARTED_AT);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // Bound every I/O attempt so a stalled upstream cannot consume the Job deadline.
-async function rfetch(url,opts={},tries=5){
+async function rfetch(url,opts={},tries=FETCH_ATTEMPTS){
   let last;
   const target=new URL(url).origin+new URL(url).pathname;
   for(let a=0;a<tries;a++){
+    const remaining=runRemainingMs();
+    if(remaining<=0)throw new Error(`run budget exhausted before ${target}`);
     const controller=new AbortController();
-    const timeout=setTimeout(()=>controller.abort(new Error(`timeout after ${FETCH_TIMEOUT_MS}ms`)),FETCH_TIMEOUT_MS);
+    const timeoutMs=Math.min(FETCH_TIMEOUT_MS,remaining);
+    const timeout=setTimeout(()=>controller.abort(new Error(`timeout after ${timeoutMs}ms`)),timeoutMs);
     try{
       const r=await fetch(url,{...opts,signal:controller.signal});
       if(r.status===429||r.status>=500){
         last=new Error(`HTTP ${r.status} ${target}`);
         console.warn(`retryable response target=${target} attempt=${a+1}/${tries} status=${r.status}`);
-        await sleep(1500*(a+1));
+        await sleep(Math.min(1500*(a+1),Math.max(0,runRemainingMs())));
         continue;
       }
       return r;
     }catch(e){
       last=new Error(`request ${target} attempt=${a+1}/${tries}: ${e.message}`);
       console.warn(last.message);
-      await sleep(1500*(a+1));
+      await sleep(Math.min(1500*(a+1),Math.max(0,runRemainingMs())));
     }finally{
       clearTimeout(timeout);
     }
@@ -88,7 +99,7 @@ async function llm(messages,max_tokens=300){const r=await rfetch(`${LURL}/v1/cha
 function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try{return JSON.parse(m[0]);}catch{return null;}}
 
 (async()=>{
-  console.log(`nl-llm-matcher start APPLY=${APPLY} BATCH=${BATCH} TOPK=${TOPK} MODEL=${MODEL} MIN_CONF=${MIN_CONF} FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS} BRAIN_PUSH_CHUNK=${BRAIN_PUSH_CHUNK}`);
+  console.log(`nl-llm-matcher start APPLY=${APPLY} BATCH=${BATCH} TOPK=${TOPK} MODEL=${MODEL} MIN_CONF=${MIN_CONF} FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS} FETCH_ATTEMPTS=${FETCH_ATTEMPTS} RUN_BUDGET_MS=${RUN_BUDGET_MS} COMPLETION_RESERVE_MS=${COMPLETION_RESERVE_MS} BRAIN_PUSH_CHUNK=${BRAIN_PUSH_CHUNK}`);
   // 1. NL storefront candidates + price
   const nlMap=await storeMap("skirmshop.nl"); const nl=[...nlMap.values()];
   const esMap=await storeMap("skirmshop.es");
@@ -109,8 +120,14 @@ function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try
   for(;;){const j=await jget(`${BRAIN}/instances/skirmshop/prices/comparison?limit=200&offset=${off}`,{headers:{"X-API-Key":BKEY,Accept:"application/json"}});const items=j.items||[];total=j.total;for(const it of items){if(it.es_price!=null&&it.es_price>0&&it.nl_price==null&&!decided.has(it.id))targets.push(it);}off+=items.length;if(items.length<200||off>=total)break;}
   console.log(`unmatched_targets=${targets.length} (decided_skip=${decided.size}); processing batch=${Math.min(BATCH,targets.length)}`);
 
-  let matched=0,nomatch=0,nocand=0,llmErrors=0; const offers=[],markers=[]; const decisions=[];
+  let matched=0,nomatch=0,nocand=0,llmErrors=0,budgetStopped=false,processed=0; const offers=[],markers=[]; const decisions=[];
   for(const t of targets.slice(0,BATCH)){
+    if(runRemainingMs()<=COMPLETION_RESERVE_MS){
+      budgetStopped=true;
+      console.warn(`run_budget_stop remaining_ms=${runRemainingMs()} reserve_ms=${COMPLETION_RESERVE_MS} processed=${processed}`);
+      break;
+    }
+    processed++;
     const esStore=esMap.get(t.id)||{}; const esPq=pq.get(norm(t.sku))||{};
     const esText=`${esStore.title||t.title||""} ${esPq.name||""}`.trim();
     if(!esText){ nocand++; markers.push(mk(t)); continue; }
@@ -150,10 +167,12 @@ function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try
     }
   }
   function mk(t){return {source_id:`channel:NL_NOMATCH:${t.sku}`,content:`no NL match for ${t.sku}`,metadata:{source:"channel_offer",channel:"NL_NOMATCH",sku:t.sku,price:0,currency:"EUR",vat_incl:false,our_product_handle:t.id,content_hash:"llm-nomatch"}};}
-  console.log(`\nDECISIONS (matched=${matched} nomatch=${nomatch} nocand=${nocand} llm_errors=${llmErrors}):`);
+  if(budgetStopped&&processed===0&&targets.length)throw new Error("run budget exhausted before processing any target");
+  console.log(`\nDECISIONS (processed=${processed} matched=${matched} nomatch=${nomatch} nocand=${nocand} llm_errors=${llmErrors} budget_stopped=${budgetStopped}):`);
   for(const d of decisions) console.log(JSON.stringify(d));
   if(!APPLY){ console.log(`\nDRY — would push ${offers.length} NL offers + ${markers.length} no-match markers`); return; }
   await pushBrain("channel",offers); await pushBrain("channel",markers);
+  if(llmErrors>MAX_LLM_ERRORS)throw new Error(`llm errors exceeded threshold: ${llmErrors}/${processed} (max ${MAX_LLM_ERRORS})`);
   console.log(`\nAPPLIED: ${offers.length} NL matches + ${markers.length} markers pushed.`);
   console.log("DONE");
 })().catch(e=>{console.error("FATAL",e.message);process.exit(1)});

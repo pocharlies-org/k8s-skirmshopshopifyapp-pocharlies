@@ -30,8 +30,12 @@ spec:
               env:
                 - { name: APPLY, value: "1" }
                 - { name: BATCH, value: "50" }
-                - { name: FETCH_TIMEOUT_MS, value: "30000" }
+                - { name: FETCH_TIMEOUT_MS, value: "10000" }
+                - { name: FETCH_ATTEMPTS, value: "3" }
+                - { name: RUN_BUDGET_MS, value: "2700000" }
+                - { name: COMPLETION_RESERVE_MS, value: "600000" }
                 - { name: BRAIN_PUSH_CHUNK, value: "25" }
+                - { name: MAX_LLM_ERRORS, value: "2" }
                 - { name: MODEL, value: "tooling" }
                 - { name: MIN_CONF, value: "0.9" }
                 - { name: BRAIN_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
