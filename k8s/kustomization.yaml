@@ -43,8 +43,8 @@ configMapGenerator:
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: v1.5.110
-    digest: sha256:17f2e3071f48cf5106158d767405beba6fafed030b7a29b2d9301e7078373cd2
+    newTag: v1.5.111
+    digest: sha256:877d8efec821c00251866dd0b6cb7e16eb93d9c6c2ac5b5005df2a3268d402a3
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
@@ -76,6 +76,11 @@ patches:
                   # the UI + /api/price-lists require a real session. Overrides the
                   # rag-secrets envFrom value. ROLLBACK: set "true" + redeploy.
                   - { name: DEV_MODE, value: "false" }
+                  # Customer Account order self-service stays canary-only. The
+                  # extension uses the same customer GID to hide the action;
+                  # this server-side gate is the enforcement boundary.
+                  - name: CUSTOMER_ORDER_SELF_SERVICE_ALLOWED_CUSTOMER_IDS
+                    value: "gid://shopify/Customer/10217917219157"
                   # Reconciliación autónoma: arma el lazo aprobar→aplicar (el
                   # apply-tick de synapse polea las `approved`). El apply sigue
                   # en dry-run hasta que la Fase 5 ponga RECONCILE_APPLY_DRYRUN=false
