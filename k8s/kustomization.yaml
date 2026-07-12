@@ -43,8 +43,8 @@ configMapGenerator:
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: v1.5.115
-    digest: sha256:b2b89949cec78d986a0e0be7fb8eba56a839249477c9002da012331275db46bc
+    newTag: v1.5.116
+    digest: sha256:51832c7ded9126f2c0f73ed6fedfc2a27b4aa05ca0e48a5127873cfe52c30674
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
@@ -77,8 +77,8 @@ patches:
                   # rag-secrets envFrom value. ROLLBACK: set "true" + redeploy.
                   - { name: DEV_MODE, value: "false" }
                   # Customer Account order self-service stays canary-only. The
-                  # extension uses the same customer GID to hide the action;
-                  # this server-side gate is the enforcement boundary.
+                  # extension checks this server-side allowlist with a verified
+                  # Customer Accounts session; the server is the enforcement boundary.
                   - name: CUSTOMER_ORDER_SELF_SERVICE_ALLOWED_CUSTOMER_IDS
                     value: "gid://shopify/Customer/10217917219157"
                   # Reconciliación autónoma: arma el lazo aprobar→aplicar (el
