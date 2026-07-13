@@ -2,7 +2,8 @@
 # deterministic canonicalize job (cronjob-canonicalize.yaml) leaves open: that one
 # only snaps FORMAT/alias drift, it never checks whether a facet value is
 # semantically CORRECT. This job re-classifies recently-changed / missing-facet
-# products via the LLM (role alias `tooling`), diffs current↔proposed canonical,
+# products via the LLM (dedicated role alias `taxonomy` → Qwen3.6-27B dense),
+# diffs current↔proposed canonical,
 # and writes REVIEW-ONLY AIProposal rows (proposalType "taxonomy_verification")
 # plus a Telegram digest. It NEVER writes to Shopify — corrections only reach the
 # store through the human-gated apply path (/app/content). Entry point = the
@@ -68,6 +69,7 @@ spec:
                     secretKeyRef:
                       name: rag-litellm-key
                       key: LITELLM_KEY
+                - { name: LITELLM_MODEL, value: "taxonomy" }
                 # @synapse_skirmshop_bot token (same Vault path observability/prod/telegram).
                 - name: TELEGRAM_BOT_TOKEN
                   valueFrom:
@@ -82,7 +84,8 @@ spec:
                 # in code (diffFacets), so part_category is safe to re-enable: genuine
                 # part fills (uppers/chassis/kits) surface, whole-gun false positives are
                 # suppressed. (Stopgap was product_kind-only before the gate shipped.)
-                - { name: ADDED_DIMS, value: "product_kind,part_category" }
+                - { name: ADDED_DIMS, value: "product_kind,part_category,platform,compatibility,brand_line" }
+                - { name: CHANGED_DIMS, value: "power_source,platform,compatibility,brand_line,spring_power" }
                 # Cost / coverage caps (the script also has its own defaults).
                 - { name: MAX_PRODUCTS, value: "300" }
                 - { name: MAX_PROPOSALS, value: "100" }
