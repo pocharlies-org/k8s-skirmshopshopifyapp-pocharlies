@@ -48,7 +48,14 @@ spec:
                     secretKeyRef:
                       name: shared-postgres-app
                       key: password
-                - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop" }
+                # connection_limit 3: sin él Prisma dimensiona el pool con
+                # `cpus_fisicos * 2 + 1` LEIDO DEL HOST (sauvage, 48 vCPU, sin
+                # cpu limit), y esta imagen es la misma que sirve el deployment,
+                # así que arranca DOS PrismaClient — el de la app y el del
+                # framework. Un solo Job podía abrir ~98 conexiones contra el
+                # postgres-shared compartido, que se saturó el 28-07-2026
+                # (367/400). Un batch secuencial no necesita más de 3.
+                - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop?connection_limit=3&pool_timeout=15&connect_timeout=10&application_name=rag-cron" }
               resources:
                 requests:
                   cpu: 100m
