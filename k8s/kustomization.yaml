@@ -18,6 +18,7 @@ resources:
   - cronjob-competitor-llm-matcher.yaml
   - cronjob-provider-sourcing-backfill.yaml
   - product-weight-edge.yaml
+  - cronjob-redirect-health.yaml
 
 namePrefix: rag-
 
