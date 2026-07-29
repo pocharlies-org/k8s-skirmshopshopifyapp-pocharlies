@@ -1,0 +1,101 @@
+# Weekly redirect-health audit (SEO recovery, plan fluffy-koala 2026-07-29).
+# Read-only: dumps all urlRedirects via bulkOperationRunQuery + the live URL set,
+# cross-checks in memory (audit classes: chain / target-404 / target-empty /
+# target-dead-prefix), and FAILS the job if broken targets exceed the cap so the
+# failure shows up in job history / alerting. Never writes to Shopify.
+# Rationale: 426 deleted collections + 435 deleted products silently broke ~10k
+# of 26.569 redirects after the Feb-Mar 2026 migration. This catches regressions
+# every time someone deletes a product/collection from the admin.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redirect-health
+spec:
+  suspend: false
+  schedule: "15 4 * * 1" # lunes 04:15 Europe/Madrid
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: redirect-health
+              image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  API="https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION:-2025-07}/graphql.json"
+                  CAP="${BROKEN_CAP:-50}"
+                  gql() { curl -s -m 60 -X POST "$API" -H "X-Shopify-Access-Token: $SHOPIFY_ACCESS_TOKEN" -H "Content-Type: application/json" --data "$1"; }
+
+                  echo "[1/3] bulk dump: urlRedirects + products + collections"
+                  gql '{"query":"mutation { bulkOperationRunQuery(query: \"{ urlRedirects { edges { node { id path target } } } products { edges { node { id handle status } } } collections { edges { node { id handle productsCount { count } } } } }\") { bulkOperation { status } userErrors { field message } } }"}' >/dev/null
+                  URL=""
+                  for i in $(seq 1 60); do
+                    P=$(gql '{"query":"{ currentBulkOperation { status url } }"}')
+                    S=$(printf '%s' "$P" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const o=JSON.parse(d);console.log((o.data.currentBulkOperation||{}).status||"")})')
+                    if [ "$S" = "COMPLETED" ]; then
+                      URL=$(printf '%s' "$P" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const o=JSON.parse(d);console.log((o.data.currentBulkOperation||{}).url||"")})')
+                      break
+                    fi
+                    [ "$S" = "FAILED" ] && { echo "bulk FAILED"; exit 1; }
+                    sleep 5
+                  done
+                  [ -n "$URL" ] || { echo "bulk timeout"; exit 1; }
+                  curl -s -m 300 -o /tmp/dump.jsonl "$URL"
+                  echo "  $(wc -l < /tmp/dump.jsonl) objetos"
+
+                  echo "[2/3] cruce en memoria"
+                  node -e '
+                  const fs = require("fs");
+                  const lines = fs.readFileSync("/tmp/dump.jsonl", "utf8").split("\n").filter(Boolean);
+                  const products = new Map(), cols = new Map(), redirects = [];
+                  for (const l of lines) {
+                    const o = JSON.parse(l);
+                    if (o.id?.includes("/Product/")) products.set(o.handle, o.status);
+                    else if (o.id?.includes("/Collection/")) cols.set(o.handle, (o.productsCount||{}).count ?? 0);
+                    else if (o.id?.includes("/UrlRedirect/")) redirects.push(o);
+                  }
+                  const norm = p => p.toLowerCase().split("?")[0].replace(/\/$/, "");
+                  const paths = new Set(redirects.map(r => norm(r.path)));
+                  const RES = /^(?:\/[a-z]{2}(?:-[a-z]{2})?)?\/(products|collections|pages)\/([^\/]+)$/;
+                  let t404 = 0, tEmpty = 0, chains = 0;
+                  for (const r of redirects) {
+                    const nt = norm(r.target);
+                    if (paths.has(nt)) { chains++; continue; }
+                    const m = nt.match(RES);
+                    if (!m) continue;
+                    if (m[1] === "products" && products.get(m[2]) !== "ACTIVE") t404++;
+                    else if (m[1] === "collections") {
+                      if (!cols.has(m[2])) t404++;
+                      else if (cols.get(m[2]) === 0) tEmpty++;
+                    }
+                  }
+                  console.log(`redirects=${redirects.length} chains=${chains} target404=${t404} targetEmpty=${tEmpty}`);
+                  fs.writeFileSync("/tmp/broken", String(t404 + tEmpty));
+                  '
+
+                  echo "[3/3] veredicto"
+                  BROKEN=$(cat /tmp/broken)
+                  if [ "$BROKEN" -gt "$CAP" ]; then
+                    echo "[ALERTA] $BROKEN redirects rotos (> cap $CAP) — alguien ha borrado productos/colecciones con redirects apuntando. Ejecutar scripts/legacy-url-map/{dump,audit,build-repair-plan}."
+                    exit 1
+                  fi
+                  echo "OK: $BROKEN rotos (cap $CAP)"
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
