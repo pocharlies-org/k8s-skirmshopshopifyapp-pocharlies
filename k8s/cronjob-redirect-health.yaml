@@ -76,7 +76,11 @@ spec:
                     if (m[1] === "products" && products.get(m[2]) !== "ACTIVE") t404++;
                     else if (m[1] === "collections") {
                       if (!cols.has(m[2])) t404++;
-                      else if (cols.get(m[2]) === 0) tEmpty++;
+                      // <= 0, no === 0: el productsCount de Admin es un contador
+                      // incremental almacenado y puede quedar NEGATIVO (inner-barrels
+                      // estaba en -1 el 29-jul-2026). Con === 0 una colección vacía
+                      // con el contador desincronizado pasaba el audit sin verse.
+                      else if (cols.get(m[2]) <= 0) tEmpty++;
                     }
                   }
                   console.log(`redirects=${redirects.length} chains=${chains} target404=${t404} targetEmpty=${tEmpty}`);
