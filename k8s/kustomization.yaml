@@ -42,6 +42,12 @@ configMapGenerator:
   - name: competitor-llm-matcher-script
     files:
       - competitor-llm-matcher.js
+  - name: redirect-health-script
+    files:
+      - redirect-health.js
+  - name: parent-health-script
+    files:
+      - parent-health.js
 
 images:
   - name: shopify-app
