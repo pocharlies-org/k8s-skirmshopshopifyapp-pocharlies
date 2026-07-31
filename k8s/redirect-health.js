@@ -66,9 +66,14 @@ async function bulkFetch(innerQuery) {
   }
   if (!startedId) throw new Error('otra bulk operation ocupo la tienda todo el presupuesto');
 
+  // Sondeo por ID con node(), NO con currentBulkOperation: `current` devuelve la
+  // operacion MAS RECIENTE de la tienda, no la tuya. Si otro job arranca una
+  // despues, la tuya deja de ser "current" y no vuelves a verla nunca — te comes
+  // el presupuesto entero saltando ids ajenos. Visto el 31-jul-2026.
+  const BY_ID = `query($id: ID!) {
+    node(id: $id) { ... on BulkOperation { id status url errorCode objectCount } } }`;
   while (Date.now() < deadline) {
-    const cur = (await gql('{ currentBulkOperation { id status url errorCode } }')).currentBulkOperation || {};
-    if (cur.id !== startedId) { await sleep(5000); continue; } // no es la nuestra
+    const cur = (await gql(BY_ID, { id: startedId })).node || {};
     if (cur.status === 'COMPLETED') {
       if (!cur.url) return [];
       const res = await fetch(cur.url, { signal: AbortSignal.timeout(300_000) });
