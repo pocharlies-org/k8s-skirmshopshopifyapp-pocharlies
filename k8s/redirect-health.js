@@ -41,9 +41,16 @@ async function gql(query, variables) {
 // OJO: Shopify solo admite UNA bulk query por app+tienda, y `currentBulkOperation`
 // es GLOBAL — devuelve la operacion en curso sea de quien sea. Si no comparas el
 // id, te comes el resultado de OTRO job y lo interpretas como tuyo.
+// Presupuesto por TIEMPO, no por iteraciones: este volcado son ~30k objetos y
+// Shopify tarda lo que le da la gana segun carga. Con 120 vueltas de 5s (10 min)
+// se quedaba corto y moria en "bulk timeout" con el job aun a media hora de su
+// activeDeadlineSeconds. 20 min deja margen bajo los 30 del job.
+const BULK_BUDGET_MS = Number(process.env.BULK_BUDGET_MS || 20 * 60 * 1000);
+
 async function bulkFetch(innerQuery) {
+  const deadline = Date.now() + BULK_BUDGET_MS;
   let startedId = null;
-  for (let attempt = 0; attempt < 30; attempt++) {
+  while (Date.now() < deadline) {
     const payload = (await gql(
       `mutation($q: String!) {
          bulkOperationRunQuery(query: $q) {
@@ -57,9 +64,9 @@ async function bulkFetch(innerQuery) {
     console.log('  otra bulk operation ocupa la tienda, esperando...');
     await sleep(10_000);
   }
-  if (!startedId) throw new Error('otra bulk operation ocupo la tienda todo el rato');
+  if (!startedId) throw new Error('otra bulk operation ocupo la tienda todo el presupuesto');
 
-  for (let i = 0; i < 120; i++) {
+  while (Date.now() < deadline) {
     const cur = (await gql('{ currentBulkOperation { id status url errorCode } }')).currentBulkOperation || {};
     if (cur.id !== startedId) { await sleep(5000); continue; } // no es la nuestra
     if (cur.status === 'COMPLETED') {
@@ -74,7 +81,7 @@ async function bulkFetch(innerQuery) {
     }
     await sleep(5000);
   }
-  throw new Error('bulk timeout');
+  throw new Error(`bulk timeout (${Math.round(BULK_BUDGET_MS/1000)}s de presupuesto agotados)`);
 }
 
 const norm = (p) => String(p || '').toLowerCase().split('?')[0].replace(/\/$/, '');

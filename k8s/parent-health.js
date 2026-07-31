@@ -87,9 +87,14 @@ async function checkTemplate() {
 // id, te comes el resultado de OTRO job y lo interpretas como tuyo. Paso de
 // verdad el 31-jul-2026 lanzando este cron y redirect-health a la vez: este leyo
 // el volcado de redirects (sin templateSuffix) y vio 0 padres.
+// Presupuesto por TIEMPO, no por iteraciones: Shopify tarda lo que le da la gana
+// segun carga, y ademas aqui se puede sumar la espera detras de otra bulk.
+const BULK_BUDGET_MS = Number(process.env.BULK_BUDGET_MS || 10 * 60 * 1000);
+
 async function bulkFetch(innerQuery) {
+  const deadline = Date.now() + BULK_BUDGET_MS;
   let startedId = null;
-  for (let attempt = 0; attempt < 30; attempt++) {
+  while (Date.now() < deadline) {
     const payload = (await gql(
       `mutation($q: String!) {
          bulkOperationRunQuery(query: $q) {
@@ -103,9 +108,9 @@ async function bulkFetch(innerQuery) {
     console.log('  otra bulk operation ocupa la tienda, esperando...');
     await sleep(10_000);
   }
-  if (!startedId) throw new Error('otra bulk operation ocupo la tienda todo el rato');
+  if (!startedId) throw new Error('otra bulk operation ocupo la tienda todo el presupuesto');
 
-  for (let i = 0; i < 60; i++) {
+  while (Date.now() < deadline) {
     const cur = (await gql('{ currentBulkOperation { id status url errorCode } }')).currentBulkOperation || {};
     if (cur.id !== startedId) { await sleep(5000); continue; } // no es la nuestra
     if (cur.status === 'COMPLETED') {
@@ -120,7 +125,7 @@ async function bulkFetch(innerQuery) {
     }
     await sleep(5000);
   }
-  throw new Error('bulk timeout');
+  throw new Error(`bulk timeout (${Math.round(BULK_BUDGET_MS/1000)}s de presupuesto agotados)`);
 }
 
 async function checkMembership() {
