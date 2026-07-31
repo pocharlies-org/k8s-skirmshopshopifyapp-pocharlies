@@ -10,7 +10,12 @@
 const STORE = process.env.SHOPIFY_STORE;
 const TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const VERSION = process.env.SHOPIFY_API_VERSION || '2025-07';
-const CAP = Number(process.env.BROKEN_CAP || 50);
+// 130 y no 50: el suelo medido el 31-jul-2026 es 105 rotos (target404=97 +
+// targetEmpty=8), destinos genuinamente borrados que la campana de reparacion
+// dejo a proposito porque borrar un 301 roto lo convierte en 404. El CronJob lo
+// sobreescribe por env; este default esta alineado para que ejecutarlo a mano no
+// de un falso positivo.
+const CAP = Number(process.env.BROKEN_CAP || 130);
 const API = `https://${STORE}/admin/api/${VERSION}/graphql.json`;
 
 if (!STORE || !TOKEN) {
@@ -33,18 +38,30 @@ async function gql(query, variables) {
   return json.data;
 }
 
+// OJO: Shopify solo admite UNA bulk query por app+tienda, y `currentBulkOperation`
+// es GLOBAL — devuelve la operacion en curso sea de quien sea. Si no comparas el
+// id, te comes el resultado de OTRO job y lo interpretas como tuyo.
 async function bulkFetch(innerQuery) {
-  const start = await gql(
-    `mutation($q: String!) {
-       bulkOperationRunQuery(query: $q) {
-         bulkOperation { id status } userErrors { field message } } }`,
-    { q: innerQuery },
-  );
-  const errs = start.bulkOperationRunQuery?.userErrors || [];
-  if (errs.length) throw new Error(`bulk userErrors: ${JSON.stringify(errs)}`);
+  let startedId = null;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const payload = (await gql(
+      `mutation($q: String!) {
+         bulkOperationRunQuery(query: $q) {
+           bulkOperation { id status } userErrors { field message } } }`,
+      { q: innerQuery },
+    )).bulkOperationRunQuery || {};
+    if (payload.bulkOperation?.id) { startedId = payload.bulkOperation.id; break; }
+    const errs = payload.userErrors || [];
+    const busy = errs.some((e) => /already in progress/i.test(e.message || ''));
+    if (!busy) throw new Error(`bulk userErrors: ${JSON.stringify(errs)}`);
+    console.log('  otra bulk operation ocupa la tienda, esperando...');
+    await sleep(10_000);
+  }
+  if (!startedId) throw new Error('otra bulk operation ocupo la tienda todo el rato');
 
   for (let i = 0; i < 120; i++) {
-    const cur = (await gql('{ currentBulkOperation { status url errorCode } }')).currentBulkOperation || {};
+    const cur = (await gql('{ currentBulkOperation { id status url errorCode } }')).currentBulkOperation || {};
+    if (cur.id !== startedId) { await sleep(5000); continue; } // no es la nuestra
     if (cur.status === 'COMPLETED') {
       if (!cur.url) return [];
       const res = await fetch(cur.url, { signal: AbortSignal.timeout(300_000) });
