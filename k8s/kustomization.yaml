@@ -19,6 +19,7 @@ resources:
   - cronjob-provider-sourcing-backfill.yaml
   - product-weight-edge.yaml
   - cronjob-redirect-health.yaml
+  - cronjob-parent-health.yaml
 
 namePrefix: rag-
 

@@ -1,0 +1,120 @@
+# Daily guard for the SEO recovery of the parent collections (plan fluffy-koala).
+# Read-only: asserts the two things that make a `parent` landing page rank, and
+# that have each already broken once:
+#
+#  1. THE TEMPLATE. `templates/collection.parent.json` in the LIVE theme must
+#     list `main-collection` in its `order`. Without it the page renders only
+#     subcollection tiles — no product grid and no CollectionPage JSON-LD — so
+#     every 301 aimed at it lands on a soft-404. This regressed on 2026-07-29
+#     when pocharlies.5 was orphaned: another session published .6 built from the
+#     older live .4, silently dropping the fix. The theme jumped .6→.7→.8→.9 in
+#     three days, and each publish is another chance to lose it. A weekly check
+#     would leave a broken template live for six days; hence daily.
+#
+#  2. THE MEMBERSHIP. The 60 parents materialised on 2026-07-29 (transitive
+#     closure of their descendants, ~11k memberships) must keep their products.
+#     An empty parent is the same soft-404 by a different route. Two parents are
+#     legitimately empty — `magazine-parts` and `srs-buckings`, whose descendants
+#     genuinely have no product — so the check caps rather than demanding zero.
+#
+# Never writes. Fails the job so it surfaces in job history / alerting.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: parent-health
+spec:
+  suspend: false
+  schedule: "20 6 * * *" # diario 06:20 Europe/Madrid (no choca con redirect-health, lunes 04:15)
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: parent-health
+              image: shopify-app # rewritten by kustomize images: → harbor …skirmshopshopifyapp:<tag>
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  API="https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION:-2025-07}/graphql.json"
+                  CAP="${EMPTY_PARENT_CAP:-4}"; export CAP  # node lo lee por process.env.CAP
+                  gql() { curl -s -m 60 -X POST "$API" -H "X-Shopify-Access-Token: $SHOPIFY_ACCESS_TOKEN" -H "Content-Type: application/json" --data "$1"; }
+
+                  echo "[1/2] plantilla collection.parent.json del tema VIVO"
+                  gql '{"query":"{ themes(first:1, roles:[MAIN]) { nodes { name files(filenames:[\"templates/collection.parent.json\"], first:1) { nodes { body { ... on OnlineStoreThemeFileBodyText { content } } } } } } }"}' > /tmp/theme.json
+                  node -e '
+                  const d = JSON.parse(require("fs").readFileSync("/tmp/theme.json","utf8"));
+                  if (d.errors) { console.error("GraphQL:", JSON.stringify(d.errors)); process.exit(1); }
+                  const t = ((d.data.themes||{}).nodes||[])[0];
+                  if (!t) { console.error("no hay tema MAIN"); process.exit(1); }
+                  const f = ((t.files||{}).nodes||[])[0];
+                  if (!f) { console.error(`[ALERTA] el tema vivo (${t.name}) NO tiene templates/collection.parent.json`); process.exit(1); }
+                  // El fichero lleva una cabecera /* ... */ que no es JSON valido.
+                  const raw = f.body.content;
+                  const m = raw.match(/"order"\s*:\s*\[([^\]]*)\]/);
+                  if (!m) { console.error(`[ALERTA] ${t.name}: collection.parent.json sin bloque "order"`); process.exit(1); }
+                  const order = m[1].split(",").map(s => s.trim().replace(/^"|"$/g, "")).filter(Boolean);
+                  console.log(`  tema=${t.name} order=[${order.join(", ")}]`);
+                  if (!order.includes("main-collection")) {
+                    console.error(`[ALERTA] ${t.name}: collection.parent.json NO lleva "main-collection" en order.`);
+                    console.error("  Las paginas padre solo renderizan azulejos: sin rejilla de producto y sin CollectionPage JSON-LD.");
+                    console.error("  Los 301 que apuntan a ellas caen en soft-404. Reaplica el fix sobre el tema vivo");
+                    console.error("  (skill skirmshop-theme-update, flujo pocharlies.N) — NO parchees asset a asset.");
+                    process.exit(1);
+                  }
+                  console.log("  OK: la rejilla sigue en la plantilla");
+                  '
+
+                  echo "[2/2] los padres siguen conteniendo producto"
+                  # Bulk en vez de paginar: esta tienda tiene el bug conocido de `after:endCursor`.
+                  gql '{"query":"mutation { bulkOperationRunQuery(query: \"{ collections { edges { node { handle templateSuffix productsCount { count } } } } }\") { bulkOperation { status } userErrors { field message } } }"}' >/dev/null
+                  URL=""
+                  for i in $(seq 1 60); do
+                    P=$(gql '{"query":"{ currentBulkOperation { status url } }"}')
+                    S=$(printf '%s' "$P" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const o=JSON.parse(d);console.log((o.data.currentBulkOperation||{}).status||"")})')
+                    if [ "$S" = "COMPLETED" ]; then
+                      URL=$(printf '%s' "$P" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const o=JSON.parse(d);console.log((o.data.currentBulkOperation||{}).url||"")})')
+                      break
+                    fi
+                    [ "$S" = "FAILED" ] && { echo "bulk FAILED"; exit 1; }
+                    sleep 5
+                  done
+                  [ -n "$URL" ] || { echo "bulk timeout"; exit 1; }
+                  curl -s -m 120 -o /tmp/cols.jsonl "$URL"
+
+                  node -e '
+                  const fs = require("fs");
+                  const lines = fs.readFileSync("/tmp/cols.jsonl","utf8").split("\n").filter(Boolean);
+                  const parents = lines.map(JSON.parse).filter(o => (o.templateSuffix||"") === "parent");
+                  // <= 0 y no === 0: productsCount es un contador incremental almacenado
+                  // y puede quedar negativo (inner-barrels estaba en -1 el 29-jul-2026).
+                  const empty = parents.filter(o => ((o.productsCount||{}).count ?? 0) <= 0).map(o => o.handle).sort();
+                  console.log(`  parents=${parents.length} vacios=${empty.length} (cap ${process.env.CAP})`);
+                  if (empty.length) console.log(`  vacios: ${empty.join(", ")}`);
+                  if (empty.length > Number(process.env.CAP)) {
+                    console.error(`[ALERTA] ${empty.length} colecciones padre vacias (> cap ${process.env.CAP}).`);
+                    console.error("  Alguien esta vaciando los padres materializados. Sospechoso historico:");
+                    console.error("  el reconcile de product-creator arrancaba las colecciones parent (arreglado 31-jul-2026).");
+                    console.error("  Rematerializar: skirmshopshopifyapp scripts/legacy-url-map/materialize-parents.py");
+                    process.exit(1);
+                  }
+                  console.log("  OK: los padres conservan su producto");
+                  '
+                  echo "OK: plantilla y membresia de los padres intactas"
+              envFrom:
+                - secretRef:
+                    name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
