@@ -10,7 +10,9 @@ metadata:
   name: nl-llm-matcher
 spec:
   suspend: false
-  schedule: "0 5 * * *" # daily 05:00 (Europe/Madrid) — after picqer-price-sync (04:30)
+  # Run after both picqer-price-sync (04:30) and the heavy personal graph
+  # maintenance (04:17), so Brain push-ingest does not contend on FalkorDB.
+  schedule: "30 6 * * *"
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
