@@ -124,8 +124,16 @@ patches:
                   # the web pod needs these or the endpoint 503s. Secret rag-litellm-key
                   # already exists (externalsecret-litellm.yaml, Vault secret/litellm).
                   - { name: LITELLM_BASE, value: "http://litellm.litellm.svc.cluster.local:4000" }
-                  - { name: LITELLM_MODEL, value: "taxonomy" }
-                  - { name: TAXONOMY_LLM_MODEL, value: "taxonomy" }
+                  # 2026-08-15: `taxonomy` -> `tooling`. `taxonomy` era uno de los cuatro
+                  # nombres (dense, dense-reasoning, dense-uncensored, taxonomy) que
+                  # apuntaban al MISMO backend con parametros identicos — comprobado en
+                  # /model/info: mismo api_base, mismo model, mismo repetition_penalty.
+                  # `tooling` es el nombre de CAPACIDAD y ademas sobrevive al cambio de
+                  # residente: en creative lo sirve el 27B denso, en llm-tp DeepSeek.
+                  # `taxonomy` no: es un nombre explicito que falla duro si el residente
+                  # de creative no esta. Este job prefiere degradar a fallar.
+                  - { name: LITELLM_MODEL, value: "tooling" }
+                  - { name: TAXONOMY_LLM_MODEL, value: "tooling" }
                   - name: LITELLM_KEY
                     valueFrom:
                       secretKeyRef: { name: rag-litellm-key, key: LITELLM_KEY }

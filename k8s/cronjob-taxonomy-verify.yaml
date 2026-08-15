@@ -2,7 +2,8 @@
 # deterministic canonicalize job (cronjob-canonicalize.yaml) leaves open: that one
 # only snaps FORMAT/alias drift, it never checks whether a facet value is
 # semantically CORRECT. This job re-classifies recently-changed / missing-facet
-# products via the LLM (dedicated role alias `taxonomy` → Qwen3.6-27B dense),
+# products via the LLM (alias de capacidad `tooling`; hoy lo sirve el 27B denso
+# uncensored, que es un Qwen3.8 — NO un 3.6, pese a lo que digan los nombres),
 # diffs current↔proposed canonical,
 # and writes REVIEW-ONLY AIProposal rows (proposalType "taxonomy_verification")
 # plus a Telegram digest. It NEVER writes to Shopify — corrections only reach the
@@ -76,7 +77,11 @@ spec:
                     secretKeyRef:
                       name: rag-litellm-key
                       key: LITELLM_KEY
-                - { name: LITELLM_MODEL, value: "taxonomy" }
+                # 2026-08-15: `taxonomy` -> `tooling`. Ver la nota en kustomization.yaml:
+                # los cuatro nombres dense*/taxonomy apuntaban al mismo backend con
+                # parametros identicos y se retiran. `tooling` es el de capacidad y
+                # sigue al residente en los dos perfiles.
+                - { name: LITELLM_MODEL, value: "tooling" }
                 # @synapse_skirmshop_bot token (same Vault path observability/prod/telegram).
                 - name: TELEGRAM_BOT_TOKEN
                   valueFrom:
