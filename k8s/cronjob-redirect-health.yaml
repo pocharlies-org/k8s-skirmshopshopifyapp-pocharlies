@@ -2,7 +2,13 @@
 # Logic lives in redirect-health.js, mounted from a ConfigMap (same pattern as the
 # other node CronJobs here). Read-only: dumps every urlRedirect plus the live URL
 # set via bulkOperationRunQuery, cross-checks in memory (chain / target-404 /
-# target-empty) and FAILS the job when broken targets exceed the cap. Never writes.
+# target-empty) and, over the cap, SENDS A TELEGRAM ALERT AND EXITS 0. Never writes.
+#
+# 2026-08-20: dejo de fallar el Job. Es SEMANAL, asi que un Job rojo se quedaba
+# siete dias en el historial y mantenia la Application `skirmshopshopifyapp` en
+# Degraded hasta que alguien reparase 163 redirects — tapando cualquier Degraded
+# de verdad de esta app. El aviso es la senal; el Job rojo no. Un exit != 0 sigue
+# siendo lo correcto para un FALLO real (sin datos, error de API, Telegram caido).
 # Rationale: 426 deleted collections + 435 deleted products silently broke ~10k of
 # the 26.569 redirects after the Feb-Mar 2026 migration. This catches regressions
 # every time someone deletes a product/collection from the admin.
@@ -47,6 +53,16 @@ spec:
                 # normal, ajustado para cazar un borrado masivo. Si algun dia se
                 # limpia el residuo, rebajalo.
                 - { name: BROKEN_CAP, value: "130" }
+                # Mismo bot y mismo chat que el resto de crons de este repo, ver
+                # cronjob-reconcile-summary.yaml. Sin esto el script no tiene por
+                # donde avisar y falla a proposito: un silencio que parece un OK
+                # es peor que un job rojo.
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: labels-telegram-bot
+                      key: bot_token
+                - { name: TELEGRAM_CHAT_ID, value: "-1003984393379" }
               envFrom:
                 - secretRef:
                     name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
