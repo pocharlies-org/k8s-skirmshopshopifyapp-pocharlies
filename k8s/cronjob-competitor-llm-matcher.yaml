@@ -12,7 +12,8 @@ kind: CronJob
 metadata:
   name: competitor-llm-matcher
 spec:
-  suspend: false
+  # Downstream del crawler de competidores, retirado el 2026-08-21.
+  suspend: true
   schedule: "30 5 * * *" # daily 05:30 (Europe/Madrid) — after nl-llm-matcher (05:00)
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
