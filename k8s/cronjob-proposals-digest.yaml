@@ -1,3 +1,12 @@
+# DEPRECATED 2026-09-25 — ARCHIVED with the taxonomy-verification project
+# (see cronjob-taxonomy-verify.yaml header). The only pending AIProposal queue
+# left was taxonomy_verification (684, never reviewed); with the verifier
+# suspended the digest would report a frozen dead queue forever — daily guilt
+# with no actionable path. categorization/description_review have 0 pending, so
+# nothing else loses a channel. Re-enable by flipping suspend if any review
+# workflow returns.
+#
+# ── Original header ──
 # Daily AI-PROPOSALS DIGEST → Telegram (Skirmshop ES OP / Katálogo RAG Propuestas).
 #
 # Read-only summary of the AIProposal review queue shown on the "Taxonomy Filters"
@@ -91,7 +100,7 @@ kind: CronJob
 metadata:
   name: taxonomy-proposals-digest
 spec:
-  suspend: false
+  suspend: true # DEPRECATED 2026-09-25 — archived with taxonomy-verify; see header.
   schedule: "0 12 * * *" # 12:00 Europe/Madrid
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid

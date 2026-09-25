@@ -1,3 +1,14 @@
+# DEPRECATED 2026-09-25 — ARCHIVED. The proposal-only semantic verifier ran
+# nightly since 2026-06-19 but its human review gate was exercised exactly once
+# (17 proposals applied on 2026-06-21, 2 rejected — zero human action since).
+# The queue accumulated to 684 pending (audited live 2026-09-25: findings still
+# valid vs Shopify, not stale) and nobody reviews /app/content. Suspend kept as
+# archive marker instead of deleting the manifests: re-enabling is one line if
+# the review habit ever comes back. The deterministic canonicalize cron
+# (cronjob-canonicalize.yaml) is NOT deprecated — it is the live facet
+# normalizer the catalog/RAG depends on. See also cronjob-proposals-digest.yaml.
+#
+# ── Original header ──
 # Nightly taxonomy SEMANTIC VERIFIER (proposal-only). Closes the gap the
 # deterministic canonicalize job (cronjob-canonicalize.yaml) leaves open: that one
 # only snaps FORMAT/alias drift, it never checks whether a facet value is
@@ -22,7 +33,7 @@ kind: CronJob
 metadata:
   name: taxonomy-verify
 spec:
-  suspend: false
+  suspend: true # DEPRECATED 2026-09-25 — see header; queue never reviewed after the 06-21 pilot.
   schedule: "0 4 * * *"
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
