@@ -10,8 +10,9 @@ resources:
   - cronjob-canonicalize.yaml
   - cronjob-health-report.yaml
   - externalsecret-litellm.yaml
-  - cronjob-taxonomy-verify.yaml
-  - cronjob-proposals-digest.yaml
+  # cronjob-taxonomy-verify + cronjob-proposals-digest removed 2026-09-26:
+  # proyecto taxonomy-verification archivado como deprecated (suspend via PR #36
+  # la noche anterior; historial completo en git y wiki #taxonomia-catalogo).
   - cronjob-reconcile-summary.yaml
   - cronjob-picqer-price-sync.yaml
   - cronjob-nl-llm-matcher.yaml
