@@ -6,7 +6,7 @@ namespace: skirmshop
 # Reuse the shared Shopify-app base (same pattern as k8s-shopify-sii-pocharlies):
 # Deployment `app` + Service `app` + edge IngressRoute `app`.
 resources:
-  - https://github.com/pocharlies/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
+  - https://github.com/pocharlies-org/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
   - cronjob-canonicalize.yaml
   - cronjob-health-report.yaml
   - externalsecret-litellm.yaml
