@@ -8,7 +8,6 @@ namespace: skirmshop
 resources:
   - https://github.com/pocharlies-org/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
   - cronjob-canonicalize.yaml
-  - cronjob-health-report.yaml
   - externalsecret-litellm.yaml
   # cronjob-taxonomy-verify + cronjob-proposals-digest removed 2026-09-26:
   # proyecto taxonomy-verification archivado como deprecated (suspend via PR #36
@@ -16,7 +15,6 @@ resources:
   - cronjob-reconcile-summary.yaml
   - cronjob-picqer-price-sync.yaml
   - cronjob-nl-llm-matcher.yaml
-  - cronjob-competitor-llm-matcher.yaml
   - cronjob-provider-sourcing-backfill.yaml
   - product-weight-edge.yaml
   - cronjob-redirect-health.yaml
@@ -40,9 +38,6 @@ configMapGenerator:
   - name: nl-llm-matcher-script
     files:
       - nl-llm-matcher.js
-  - name: competitor-llm-matcher-script
-    files:
-      - competitor-llm-matcher.js
   - name: redirect-health-script
     files:
       - redirect-health.js
