@@ -20,8 +20,8 @@ Manifiestos GitOps de la app «Pocharlies Catalog RAG Sync». **Repo de aplicaci
 - `SCOPES` de Shopify declarados en el Deployment (más amplios que `shopify.app.toml`: añade `read_all_orders`, `read_returns`): deben alinearse con la app al cambiar scopes.
 
 ## Componentes compartidos
-- Publica: Deployment/Service `rag-app` y IngressRoute `app` (nombres tras el prefijo), CronJobs `canonicalize` (02:30), `health-report`, `taxonomy-verify`, `proposals-digest`, `reconcile-summary`, `picqer-price-sync` (04:30 diario), `nl-llm-matcher`, `competitor-llm-matcher`, `provider-sourcing-backfill`, `redirect-health`, `parent-health`, y `product-weight-edge.yaml` (rate-limit de `/api/product-weight`).
-- Consume: scripts versionados aquí (`k8s/picqer-price-sync.js`, `nl-llm-matcher.js`, `competitor-llm-matcher.js`, `redirect-health.js`, `parent-health.js`; montados como ConfigMap con hash) y la imagen de la app para los jobs que ejecutan código de la app.
+- Publica: Deployment/Service `rag-app` y IngressRoute `app` (nombres tras el prefijo), CronJobs `canonicalize` (02:30), `taxonomy-verify`, `proposals-digest`, `reconcile-summary`, `picqer-price-sync` (04:30 diario), `nl-llm-matcher`, `provider-sourcing-backfill`, `redirect-health`, `parent-health`, y `product-weight-edge.yaml` (rate-limit de `/api/product-weight`).
+- Consume: scripts versionados aquí (`k8s/picqer-price-sync.js`, `nl-llm-matcher.js`, `redirect-health.js`, `parent-health.js`; montados como ConfigMap con hash) y la imagen de la app para los jobs que ejecutan código de la app.
 - Los scripts de cron son lógica de negocio que vive en el chart, no en el repo de aplicación: duplicación potencial con `skirmshopshopifyapp/scripts/`.
 
 ## Cómo se construye
