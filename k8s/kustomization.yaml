@@ -90,7 +90,7 @@ patches:
                   # apply-tick de synapse polea las `approved`). El apply sigue
                   # en dry-run hasta que la Fase 5 ponga RECONCILE_APPLY_DRYRUN=false
                   # en el adapter synapse. Kill-switch global: poner "false" aquí.
-                  - { name: RECONCILE_APPLY_ENABLED, value: "true" }
+                  - { name: RECONCILE_APPLY_ENABLED, value: "false" }
                   # A: create-draft autónomo. El poller (create-draft.v1 event +
                   # create-draft-tick schedule) crea DRAFTS para productos NUEVOS
                   # unmatched encolados por el sync; gated per-fabricante por

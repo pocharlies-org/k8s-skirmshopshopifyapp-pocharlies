@@ -8,7 +8,7 @@ kind: CronJob
 metadata:
   name: reconcile-summary
 spec:
-  suspend: false
+  suspend: true # 2026-10-02: digest suspendido (cola de reconcile no se limpia; auto-apply apagado)
   schedule: "0 12 * * *" # daily 12:00
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
