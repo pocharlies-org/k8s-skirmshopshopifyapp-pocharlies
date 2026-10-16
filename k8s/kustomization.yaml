@@ -48,8 +48,8 @@ configMapGenerator:
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: v1.5.129
-    digest: sha256:c984e65e918ff74d0d73848b5972e7f08f39999993c2feb475dfc65dfc4bb23b
+    newTag: v1.5.130
+    digest: sha256:c58b0515c6a0ea2057b1e056a751c1ebf52d7dc26851e1475bebeea929f0da79
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
