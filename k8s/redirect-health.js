@@ -1,17 +1,14 @@
 // Weekly redirect-health audit (SEO recovery, plan fluffy-koala 2026-07-29).
 // Read-only: bulk-dumps every urlRedirect plus the live product/collection sets,
-// cross-checks them in memory and, when broken targets exceed the cap, SENDS A
-// TELEGRAM ALERT AND EXITS 0. Never writes to Shopify.
+// cross-checks them in memory and, when broken targets exceed the cap, logs the
+// ALERT AND EXITS 1. Never writes to Shopify.
 //
-// Why exit 0 on the alert (changed 2026-08-20). It used to `process.exit(1)`.
-// This job is WEEKLY, so one red Job sat in history for seven days and kept the
-// `skirmshopshopifyapp` Application in Degraded until somebody repaired 163
-// redirects — masking any real Degrade in that app. That is exactly the trap the
-// litellm-watchdog author documented avoiding in their own code: "dejaria la
-// Application de Argo en Degraded [...] tapando un Degraded de verdad. El aviso
-// es la senal." The alert is the signal; a failed Job is not.
-// A non-zero exit is still correct for a genuine FAILURE (no data, API error) —
-// that is the catch() at the bottom, and it stays.
+// INFRA-912 (2026-10-17, Dani: «las alertas en Telegram son inútiles»): fuera el
+// aviso por Telegram y vuelve el exit 1 sobre el cap. El motivo de exit 0 era que
+// el aviso existia; sin él, el Job rojo ES la senal: K8sCronJobFailed -> Keep ->
+// Request (ops-watch). El trap de 2026-08-20 (un Job rojo semanal tapando un
+// Degraded de verdad) lo cubre ahora la correlacion `cron-job-failed` de Keep,
+// que agrupa por namespace+alertname y abre incidente con nombre.
 //
 // Rationale: 426 deleted collections + 435 deleted products silently broke ~10k of
 // the 26.569 redirects after the Feb-Mar 2026 migration. This catches the same
@@ -34,35 +31,6 @@ if (!STORE || !TOKEN) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Aviso a Telegram. Mismo bot y mismo chat que el resto de crons de este repo
-// (`labels-telegram-bot` / -1003984393379, ver cronjob-reconcile-summary.yaml).
-// Si el aviso no sale, el job SI falla: sin token no hay senal, y un silencio
-// que parece un OK es peor que un job rojo.
-async function avisa(html) {
-  const tok = process.env.TELEGRAM_BOT_TOKEN;
-  const chat = process.env.TELEGRAM_CHAT_ID;
-  if (!tok || !chat) {
-    console.error('[ERROR] sin TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID: no puedo avisar');
-    process.exit(1);
-  }
-  const res = await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chat,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-      text: html,
-    }),
-  });
-  const body = await res.text();
-  console.log(`telegram: http=${res.status} resp=${body.slice(0, 200)}`);
-  if (!res.ok || !body.includes('"ok":true')) {
-    console.error('[ERROR] Telegram rechazo el aviso');
-    process.exit(1);
-  }
-}
 
 async function gql(query, variables) {
   const res = await fetch(API, {
@@ -174,23 +142,14 @@ const RES = /^(?:\/[a-z]{2}(?:-[a-z]{2})?)?\/(products|collections|pages)\/([^/]
   console.log('[3/3] veredicto');
   const broken = t404 + tEmpty;
   if (broken > CAP) {
-    console.error(`[ALERTA] ${broken} redirects rotos (> cap ${CAP}) — alguien ha borrado`);
-    console.error('  productos/colecciones con redirects apuntandoles. Ejecutar');
-    console.error('  scripts/legacy-url-map/{dump,audit,build-repair-plan}.');
-    await avisa(
-      `\u{1F7E0} <b>Redirects rotos en Skirmshop</b>\n\n` +
-        `<b>${broken}</b> redirects apuntan a un destino que ya no existe ` +
-        `(cap ${CAP}).\n` +
-        `· ${t404} a productos/colecciones borrados\n` +
-        `· ${tEmpty} a colecciones vacias\n` +
-        `· ${redirects.length} redirects auditados, ${chains} encadenados\n\n` +
-        `<b>Que hacer</b>\nAlguien ha borrado productos o colecciones que ` +
-        `tenian redirects apuntandoles. Se repara con ` +
-        `<code>scripts/legacy-url-map/{dump,audit,build-repair-plan}</code>.\n` +
-        `No borres los 301 rotos: un 301 roto redirige, un 404 no.`,
-    );
-    // exit 0 A PROPOSITO — ver la cabecera. El aviso es la senal, no el Job rojo.
-    return;
+    // El log del Job lleva el aviso completo (destino del alerta: K8sCronJobFailed
+    // -> Keep -> Request). Que hacer, en el log: no borres los 301 rotos, un 301
+    // roto redirige y un 404 no.
+    console.error(`[ALERTA] ${broken} redirects rotos (> cap ${CAP}):`);
+    console.error(`  ${t404} a productos/colecciones borrados, ${tEmpty} a colecciones vacias`);
+    console.error(`  ${redirects.length} auditados, ${chains} encadenados`);
+    console.error('  reparar con scripts/legacy-url-map/{dump,audit,build-repair-plan}');
+    process.exit(1);
   }
   console.log(`OK: ${broken} rotos (cap ${CAP})`);
 })().catch((err) => {
