@@ -121,37 +121,46 @@ const RES = /^(?:\/[a-z]{2}(?:-[a-z]{2})?)?\/(products|collections|pages)\/([^/]
   if (!redirects.length) throw new Error('el bulk no devolvio ningun urlRedirect');
 
   const paths = new Set(redirects.map((r) => norm(r.path)));
-  let chains = 0, t404 = 0, tEmpty = 0;
+  // tGone = el handle del target YA NO EXISTE (borrado o renombrado): eso es la
+  // senal que este job existe para cazar (ver rationale de arriba).
+  // tInactive = el handle existe pero no esta ACTIVE (ARCHIVED/DRAFT). Archivar
+  // es operacion normal del catalogo (la baja de Picqer archiva, ver skill
+  // skirmshop-catalog-rules): SC-4274 (2026-11-02) ~934 redirects a productos
+  // archivados por una bajada semanal dispararon la alarma cada lunes y
+  // ahogaron la senal real. Se informa, no alarma.
+  let chains = 0, tGone = 0, tInactive = 0, tEmpty = 0;
   for (const r of redirects) {
     const nt = norm(r.target);
     if (paths.has(nt)) { chains++; continue; }
     const m = nt.match(RES);
     if (!m) continue;
     if (m[1] === 'products') {
-      if (products.get(m[2]) !== 'ACTIVE') t404++;
+      if (!products.has(m[2])) tGone++;
+      else if (products.get(m[2]) !== 'ACTIVE') tInactive++;
     } else if (m[1] === 'collections') {
-      if (!cols.has(m[2])) t404++;
+      if (!cols.has(m[2])) tGone++;
       // <= 0 y no === 0: productsCount es un contador incremental almacenado y
       // puede quedar NEGATIVO (inner-barrels estaba en -1 el 29-jul-2026). Con
       // === 0 una coleccion vacia con el contador desincronizado pasaba el audit.
       else if (cols.get(m[2]) <= 0) tEmpty++;
     }
   }
-  console.log(`  redirects=${redirects.length} chains=${chains} target404=${t404} targetEmpty=${tEmpty}`);
+  console.log(`  redirects=${redirects.length} chains=${chains} targetGone=${tGone} targetInactive=${tInactive} targetEmpty=${tEmpty}`);
 
   console.log('[3/3] veredicto');
-  const broken = t404 + tEmpty;
+  const broken = tGone + tEmpty;
   if (broken > CAP) {
     // El log del Job lleva el aviso completo (destino del alerta: K8sCronJobFailed
     // -> Keep -> Request). Que hacer, en el log: no borres los 301 rotos, un 301
     // roto redirige y un 404 no.
     console.error(`[ALERTA] ${broken} redirects rotos (> cap ${CAP}):`);
-    console.error(`  ${t404} a productos/colecciones borrados, ${tEmpty} a colecciones vacias`);
+    console.error(`  ${tGone} a productos/colecciones BORRADOS, ${tEmpty} a colecciones vacias`);
+    console.error(`  ${tInactive} a productos archivados/borradores (informativo, no cuenta)`);
     console.error(`  ${redirects.length} auditados, ${chains} encadenados`);
     console.error('  reparar con scripts/legacy-url-map/{dump,audit,build-repair-plan}');
     process.exit(1);
   }
-  console.log(`OK: ${broken} rotos (cap ${CAP})`);
+  console.log(`OK: ${broken} rotos (cap ${CAP}), ${tInactive} a inactivos (informativo)`);
 })().catch((err) => {
   console.error(`[ERROR] ${err.message}`);
   process.exit(1);
