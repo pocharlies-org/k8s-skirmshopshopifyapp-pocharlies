@@ -52,6 +52,12 @@ spec:
                 # normal, ajustado para cazar un borrado masivo. Si algun dia se
                 # limpia el residuo, rebajalo.
                 - { name: BROKEN_CAP, value: "130" }
+                # SKIRM-345: sube el veredicto a la app (tabla RedirectHealthRun)
+                # para admin.skirmshop.es/seo. Sin estas env el job no sube nada.
+                - { name: REDIRECT_API_URL, value: "http://rag-app.skirmshop.svc.cluster.local/api/redirect-health" }
+                - name: CATALOG_SYNC_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: catalog-api-server, key: CATALOG_SYNC_TOKEN }
               envFrom:
                 - secretRef:
                     name: rag-secrets # SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN / SHOPIFY_API_VERSION
