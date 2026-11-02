@@ -24,6 +24,25 @@ const VERSION = process.env.SHOPIFY_API_VERSION || '2025-07';
 // de un falso positivo.
 const CAP = Number(process.env.BROKEN_CAP || 130);
 const API = `https://${STORE}/admin/api/${VERSION}/graphql.json`;
+// SKIRM-345: el veredicto se sube a la app (tabla RedirectHealthRun) para
+// admin.skirmshop.es/seo. Sin env, no se sube (ejecuciones a mano).
+const REPORT_URL = process.env.REDIRECT_API_URL || '';
+const REPORT_TOKEN = process.env.CATALOG_SYNC_TOKEN || '';
+
+async function report(verdict) {
+  if (!REPORT_URL || !REPORT_TOKEN) return;
+  try {
+    const res = await fetch(REPORT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-catalog-token': REPORT_TOKEN },
+      body: JSON.stringify(verdict),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) console.error(`[report] HTTP ${res.status} (no-fatal)`);
+  } catch (err) {
+    console.error(`[report] ${err.message} (no-fatal)`);
+  }
+}
 
 if (!STORE || !TOKEN) {
   console.error('faltan SHOPIFY_STORE / SHOPIFY_ACCESS_TOKEN');
@@ -129,26 +148,37 @@ const RES = /^(?:\/[a-z]{2}(?:-[a-z]{2})?)?\/(products|collections|pages)\/([^/]
   // archivados por una bajada semanal dispararon la alarma cada lunes y
   // ahogaron la senal real. Se informa, no alarma.
   let chains = 0, tGone = 0, tInactive = 0, tEmpty = 0;
+  const samples = []; // hasta 100 rotos, para la vista del panel (SKIRM-345)
   for (const r of redirects) {
     const nt = norm(r.target);
     if (paths.has(nt)) { chains++; continue; }
     const m = nt.match(RES);
     if (!m) continue;
     if (m[1] === 'products') {
-      if (!products.has(m[2])) tGone++;
+      if (!products.has(m[2])) { tGone++; if (samples.length < 100) samples.push({ source: r.path, target: r.target, kind: 'gone' }); }
       else if (products.get(m[2]) !== 'ACTIVE') tInactive++;
     } else if (m[1] === 'collections') {
-      if (!cols.has(m[2])) tGone++;
+      if (!cols.has(m[2])) { tGone++; if (samples.length < 100) samples.push({ source: r.path, target: r.target, kind: 'gone' }); }
       // <= 0 y no === 0: productsCount es un contador incremental almacenado y
       // puede quedar NEGATIVO (inner-barrels estaba en -1 el 29-jul-2026). Con
       // === 0 una coleccion vacia con el contador desincronizado pasaba el audit.
-      else if (cols.get(m[2]) <= 0) tEmpty++;
+      else if (cols.get(m[2]) <= 0) { tEmpty++; if (samples.length < 100) samples.push({ source: r.path, target: r.target, kind: 'empty' }); }
     }
   }
   console.log(`  redirects=${redirects.length} chains=${chains} targetGone=${tGone} targetInactive=${tInactive} targetEmpty=${tEmpty}`);
 
   console.log('[3/3] veredicto');
   const broken = tGone + tEmpty;
+  await report({
+    ranAt: new Date().toISOString(),
+    redirects: redirects.length,
+    chains,
+    targetGone: tGone,
+    targetEmpty: tEmpty,
+    cap: CAP,
+    ok: broken <= CAP,
+    samples,
+  });
   if (broken > CAP) {
     // El log del Job lleva el aviso completo (destino del alerta: K8sCronJobFailed
     // -> Keep -> Request). Que hacer, en el log: no borres los 301 rotos, un 301
