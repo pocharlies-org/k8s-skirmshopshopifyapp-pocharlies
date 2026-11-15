@@ -87,7 +87,6 @@ const STOP=new Set("the a an of for with and or to in on at by de la el los las 
 function toks(s){return [...new Set((s||"").toLowerCase().replace(/<[^>]+>/g," ").replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(t=>t.length>1&&!STOP.has(t)))];}
 function stripHtml(s){return (s||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim().slice(0,600);}
 async function jget(url,opts={}){const r=await rfetch(url,opts);if(r.status<200||r.status>=300)throw new Error("HTTP "+r.status+" "+url);return JSON.parse(r.body);}
-async function cypher(query){const r=await rfetch(`${BRAIN}/graph/skirmshop/cypher`,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":BKEY},body:JSON.stringify({query,limit:100000})});if(r.status<200||r.status>=300)throw new Error("cypher HTTP "+r.status+": "+r.body.slice(0,200));const j=JSON.parse(r.body);return j.rows||j.result||j.data||j;}
 async function pushBrain(adapter,documents){
   for(let start=0;start<documents.length;start+=BRAIN_PUSH_CHUNK){
     const chunk=documents.slice(start,start+BRAIN_PUSH_CHUNK);
@@ -116,7 +115,7 @@ function parseJson(s){const m=(s||"").match(/\{[\s\S]*\}/);if(!m)return null;try
   function candidates(esText){const q=toks(esText);const sc=new Map();for(const w of q){const idfw=idf(w);if(idfw<0.5)continue;for(const i of (post.get(w)||[]))sc.set(i,(sc.get(i)||0)+idfw);}return [...sc.entries()].sort((a,b)=>b[1]-a[1]).slice(0,TOPK).map(([i])=>nl[i]);}
 
   // 2. ES unmatched targets: es_price>0 AND no NL offer, minus already-decided (NL or NL_NOMATCH marker)
-  const decidedRows=await cypher("MATCH (p:Product)-[:HAS_CHANNEL_PRICE]->(co:ChannelOffer) WHERE co.channel IN ['NL','NL_NOMATCH'] RETURN p.id AS id, p.sku AS sku, co.price AS price, co.channel AS ch");
+  const decidedRows=(await jget(`${BRAIN}/instances/skirmshop/prices/channel-offers?channel=NL,NL_NOMATCH`,{headers:{"X-API-Key":BKEY,Accept:"application/json"}})).items;
   const decided=new Set((decidedRows||[]).map(r=>r.id));
   const targets=[]; let off=0,total=0;
   for(;;){const j=await jget(`${BRAIN}/instances/skirmshop/prices/comparison?limit=200&offset=${off}`,{headers:{"X-API-Key":BKEY,Accept:"application/json"}});const items=j.items||[];total=j.total;for(const it of items){if(it.es_price!=null&&it.es_price>0&&it.nl_price==null&&!decided.has(it.id))targets.push(it);}off+=items.length;if(items.length<200||off>=total)break;}
