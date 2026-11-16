@@ -9,6 +9,7 @@ resources:
   - https://github.com/pocharlies-org/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
   - cronjob-canonicalize.yaml
   - externalsecret-litellm.yaml
+  - externalsecret-catalogo-db.yaml
   # cronjob-taxonomy-verify + cronjob-proposals-digest removed 2026-09-26:
   # proyecto taxonomy-verification archivado como deprecated (suspend via PR #36
   # la noche anterior; historial completo en git y wiki #taxonomia-catalogo).
@@ -114,6 +115,10 @@ patches:
                   - name: SII_CERTIFICATE_PASSPHRASE
                     valueFrom:
                       secretKeyRef: { name: sii-certificate, key: passphrase }
+                  # SC-5827: base `catalogo` (webhook de Shopify y pestaña Prices), antes del Brain.
+                  - name: CATALOGO_DATABASE_URL
+                    valueFrom:
+                      secretKeyRef: { name: rag-catalogo-db, key: CATALOGO_DATABASE_URL }
                   # LiteLLM gateway for the "Corregir con IA" proposal-correction
                   # endpoint (/api/content correct-proposal → reclassify-one). The
                   # verifier LLM path previously ran ONLY in cronjob-taxonomy-verify;
