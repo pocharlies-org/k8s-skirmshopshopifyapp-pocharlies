@@ -33,7 +33,7 @@ spec:
                 - secretRef:
                     name: rag-secrets # SHOPIFY_STORE + SHOPIFY_ACCESS_TOKEN (Admin API); DATABASE_URL host is BOGUS, overridden below
               env:
-                # DB connection -- MUST mirror the base Deployment / reconcile-summary
+                # DB connection -- MUST mirror the base Deployment
                 # override: rag-secrets' DATABASE_URL points at a non-existent host
                 # (shared-postgres, ENOTFOUND); the real CNPG endpoint is built here
                 # from shared-postgres-app. DB_USER/DB_PASSWORD must precede
