@@ -1,31 +1,36 @@
 /**
  * picqer-price-sync (durable CronJob) — keeps the Prices tab's Coste/Margen + NL
- * fresh for the whole catalog. Daily, self-contained (node:20 + this script from a
- * ConfigMap; env from existing secrets).
+ * fresh for the whole catalog. Daily, self-contained (runs in the rag-app image —
+ * @prisma/client — with this script from a ConfigMap; env from existing secrets).
+ * SC-5827: reads and writes `catalogo` directly (was: brain prices/comparison +
+ * push-ingest). Same row shapes the app's writers use, so the exporter
+ * (app/services/prices/export.server.ts) finds them.
  *
  * COST: GAP-FILL only — keyed by productcode_supplier (manufacturer SKU — the same
- *   key the synapse driver uses) with productcode fallback, so a push MERGES into
- *   the driver's ManufacturerProduct node instead of duplicating. Never overwrites
- *   products that already show cost. Filter es>0 AND cost>0 (real negative margins
- *   kept). → ManufacturerProduct + SOURCED_FROM.
+ *   key the synapse driver uses) with productcode fallback, so a write MERGES into
+ *   the driver's catalogo.manufacturer_product row instead of duplicating. Never
+ *   overwrites products that already show cost. Filter es>0 AND cost>0 (real
+ *   negative margins kept). → manufacturer_product + product_sourced_from.
  *
  * NL: REFRESH-ON-CHANGE from the Picqer NET price (single source of truth, self-heals
- *   drift, but only pushes products whose net actually changed vs the brain — so the
- *   nightly load stays light and the push stays reliable). ES and NL are separate
- *   Picqer products sharing a productcode_supplier; the cheapest NL-sibling Picqer
- *   `price` IS the NL net (ex-VAT). We store that net with vat_incl:false so the read
- *   layer's ×1.21 yields the correct ES-comparable value (and nl_price_raw = the true
- *   ex-VAT net). → ChannelOffer.
+ *   drift, but only writes products whose net actually changed vs the stored NL
+ *   offer — so the nightly load stays light). ES and NL are separate Picqer products
+ *   sharing a productcode_supplier; the cheapest NL-sibling Picqer `price` IS the NL
+ *   net (ex-VAT). We store that net with vat_incl:false so the read layer's ×1.21
+ *   yields the correct ES-comparable value. → channel_offer + product_channel_offer.
  *   v1 BUG (fixed 2026-06): it stored the skirmshop.nl storefront RETAIL price (already
- *   VAT-incl) as vat_incl:false, inflating NL ~+20%. Now uses the Picqer net directly,
- *   matching the one-off Part B correction. Keyed channel:NL:<es-sku> (idempotent).
+ *   VAT-incl) as vat_incl:false, inflating NL ~+20%. Now uses the Picqer net directly.
+ *   Keyed channel:NL:<es-sku> (idempotent).
  *
  * Set APPLY=1 to write.
  */
-const BRAIN=(process.env.POCHARLIES_RAG_URL||process.env.BRAIN_URL||"http://skirmshop-brain-v2:5001").replace(/\/+$/,"");
-const BKEY=process.env.BRAIN_API_KEY||""; const PKEY=process.env.PICQER_API_KEY||""; const SUB=process.env.PICQER_SUBDOMAIN||"skirmshop";
+if(!process.env.CATALOGO_DATABASE_URL){console.error("CATALOGO_DATABASE_URL is required");process.exit(1);}
+const { PrismaClient } = require("@prisma/client");
+const CATALOGO_URL = process.env.CATALOGO_DATABASE_URL + (process.env.CATALOGO_DATABASE_URL.includes("?") ? "&" : "?") + "connection_limit=3&pool_timeout=15&connect_timeout=10&application_name=picqer-price-sync";
+const db = new PrismaClient({ datasources: { db: { url: CATALOGO_URL } }, log: ["error"] });
+const PKEY=process.env.PICQER_API_KEY||""; const SUB=process.env.PICQER_SUBDOMAIN||"skirmshop";
 const PBASE=`https://${SUB}.picqer.com/api/v1`; const PAUTH="Basic "+Buffer.from(PKEY+":X").toString("base64");
-const APPLY=process.env.APPLY==="1"; const CHUNK=100;
+const APPLY=process.env.APPLY==="1";
 // Cost plausibility guard: a Shopify SKU must resolve to the SAME product in Picqer.
 // If the Picqer net price is wildly off our ES ex-VAT price (e.g. a 495€ rifle whose
 // productcode collides with a 32€ magazine SKU), the SKU maps to a DIFFERENT product —
@@ -34,13 +39,41 @@ const APPLY=process.env.APPLY==="1"; const CHUNK=100;
 const COST_PRICE_MINR=Number(process.env.COST_PRICE_MINR||0.15); const COST_PRICE_MAXR=Number(process.env.COST_PRICE_MAXR||6);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms)); const norm=s=>(s||"").toString().trim().toLowerCase();
 async function jget(url,opts={}){ let last; for(let a=0;a<6;a++){ let r; try{ r=await fetch(url,opts); }catch(e){ last=e; await sleep(1500*(a+1)); continue; } /* retry transient network errors ("fetch failed") */ if(r.status===429||r.status>=500){ last=new Error("HTTP "+r.status+" "+url); await sleep(1500*(a+1)); continue; } if(!r.ok) throw new Error("HTTP "+r.status+" "+url); return r.json(); } throw last||new Error("retries exhausted "+url); }
-async function push(adapter,documents){ let last; for(let a=0;a<6;a++){ let r; try{ r=await fetch(`${BRAIN}/instances/skirmshop/push-ingest`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json","X-API-Key":BKEY},body:JSON.stringify({adapter,documents})}); }catch(e){ last=e; await sleep(1500*(a+1)); continue; } /* retry transient network errors (e.g. "fetch failed") */ if(r.status===429||r.status>=500){ last=new Error("push "+adapter+" HTTP "+r.status); await sleep(1500*(a+1)); continue; } const t=await r.text(); if(!r.ok) throw new Error("push "+adapter+" HTTP "+r.status+": "+t.slice(0,200)); /* 4xx = fatal, no retry */ return JSON.parse(t); } throw last; }
 async function storeMap(host){ const m=new Map(); for(let p=1;p<=80;p++){ const j=await jget(`https://${host}/products.json?limit=250&page=${p}`,{headers:{Accept:"application/json"}}); const ps=j.products||[]; if(!ps.length)break; for(const pr of ps){ const prim=(pr.variants||[])[0]||{}; for(const v of (pr.variants||[])) if(v.sku) m.set(norm(v.sku),{handle:pr.handle, skuOrig:String(v.sku).trim(), price:Number(prim.price)||null}); } if(ps.length<250)break; await sleep(450);} return m; }
-function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n));return o;}
+// Current state per product handle, straight from catalogo (replaces the brain's
+// /prices/comparison): ES price, best cost via product_sourced_from (tier order of
+// the read layer aside — gap-fill only needs "has cost"), latest NL net.
+async function currentPrices(){
+  const rows=await db.$queryRawUnsafe(`SELECT p.id AS handle, p.price AS es,
+    (SELECT mp.cost FROM catalogo.product_sourced_from psf
+       JOIN catalogo.manufacturer_product mp ON mp.id = psf.manufacturer_product_id
+      WHERE psf.product_id = p.id AND mp.cost IS NOT NULL
+      ORDER BY psf.match_score DESC NULLS LAST LIMIT 1) AS cost,
+    (SELECT co.price FROM catalogo.product_channel_offer pco
+       JOIN catalogo.channel_offer co ON co.id = pco.channel_offer_id
+      WHERE pco.product_id = p.id AND co.channel = 'NL'
+      ORDER BY co.observed_at DESC NULLS LAST LIMIT 1) AS nl_raw
+    FROM catalogo.product p WHERE p.deleted_at IS NULL`);
+  const m=new Map();
+  for(const r of rows) m.set(r.handle,{es:r.es==null?null:Number(r.es),cost:r.cost==null?null:Number(r.cost),nlRaw:r.nl_raw==null?null:Number(r.nl_raw)});
+  return m;
+}
+async function writeCost(key,cost,handle){
+  await db.$executeRawUnsafe(`INSERT INTO catalogo.manufacturer_product (id, sku, cost, currency) VALUES ($1,$1,$2,'EUR')
+    ON CONFLICT (id) DO UPDATE SET sku = EXCLUDED.sku, cost = EXCLUDED.cost`, key, cost);
+  await db.$executeRawUnsafe(`INSERT INTO catalogo.product_sourced_from (product_id, manufacturer_product_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, handle, key);
+}
+async function writeNl(sku,price,handle,hash){
+  const id=`channel:NL:${sku}`; const now=new Date().toISOString();
+  await db.$executeRawUnsafe(`INSERT INTO catalogo.channel_offer (id, sku, channel, kind, price, currency, vat_incl, observed_at, content_hash)
+    VALUES ($1,$2,'NL','channel',$3,'EUR',false,$4::timestamptz,$5)
+    ON CONFLICT (id) DO UPDATE SET sku = EXCLUDED.sku, price = EXCLUDED.price,
+      observed_at = EXCLUDED.observed_at, content_hash = EXCLUDED.content_hash`, id, sku, price, now, hash);
+  await db.$executeRawUnsafe(`INSERT INTO catalogo.product_channel_offer (product_id, channel_offer_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, handle, id);
+}
 (async()=>{
   const es=await storeMap("skirmshop.es");
-  const brain=new Map(); let off=0,total=0;
-  for(;;){ const j=await jget(`${BRAIN}/instances/skirmshop/prices/comparison?limit=200&offset=${off}`,{headers:{"X-API-Key":BKEY,Accept:"application/json"}}); const items=j.items||[]; total=j.total; for(const it of items) if(it.id) brain.set(it.id,{es:it.es_price,cost:it.cost,nl:it.nl_price,nlRaw:it.nl_price_raw}); off+=items.length; if(items.length<200||off>=total)break; }
+  const cur=await currentPrices();
   // Picqer: productcode -> {cost, sup}; supplier -> [sibling productcodes]
   const pq=new Map(); const bySup=new Map(); const supNl=new Map(); let poff=0;
   const isOtherChan=c=>/^(sp-|uk-?|us-?)/i.test(c);
@@ -58,16 +91,16 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
         // NL net = the cheapest non-ES/UK/US Picqer sibling price (ex-VAT) under this supplier.
         if(!isOtherChan(code) && price>0){ if(!supNl.has(sk)||price<supNl.get(sk)) supNl.set(sk,price); } } }
     poff+=rows.length; if(rows.length<100)break; await sleep(110); }
-  console.log(`maps: es=${es.size} supNl=${supNl.size} brain=${brain.size} picqer=${pq.size} suppliers=${bySup.size} APPLY=${APPLY}`);
+  console.log(`maps: es=${es.size} supNl=${supNl.size} catalogo=${cur.size} picqer=${pq.size} suppliers=${bySup.size} APPLY=${APPLY}`);
 
   // NL net resolver: the cheapest NL-sibling Picqer price (ex-VAT) under the same supplier.
   function nlPriceFor(esSku, sup){ const sk=norm(sup); return (sk && supNl.has(sk)) ? supNl.get(sk) : null; }
 
-  const costDocs=[], nlDocs=[]; let nlMatched=0, costSkippedMismatch=0;
+  const costRows=[], nlRows=[]; let nlMatched=0, costSkippedMismatch=0;
   for(const [sku, info] of es){
-    const b=brain.get(info.handle); if(!b) continue;
+    const b=cur.get(info.handle); if(!b) continue;
     const e=pq.get(sku); const cost=e&&e.cost; const sup=e&&e.sup; const pqPrice=e&&e.price;
-    // COST gap-fill — merge into driver node via productcode_supplier.
+    // COST gap-fill — merge into driver row via productcode_supplier.
     if(cost>0 && b.cost==null && b.es!=null && b.es>0){
       // Plausibility guard: skip when the Picqer product the SKU resolves to is clearly
       // a DIFFERENT product (its net price is wildly off our ES ex-VAT price) — a
@@ -78,23 +111,21 @@ function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n)
       if(mismatch){ costSkippedMismatch++; }
       else {
         const key=(sup||info.skuOrig);
-        costDocs.push({ source_id:`manufacturer:${key}`, content:`Picqer cost for ${key}: ${cost} EUR`,
-          metadata:{ source:"manufacturer", sku:key, cost_eur:cost, our_product_handle:info.handle } });
+        costRows.push({ key, cost, handle: info.handle });
       }
     }
-    // NL REFRESH-ON-CHANGE from the Picqer net (ex-VAT): push only when the net is new
-    // or differs from the brain's current nl_price_raw — keeps self-heal, light nightly load.
+    // NL REFRESH-ON-CHANGE from the Picqer net (ex-VAT): write only when the net is new
+    // or differs from the stored NL price — keeps self-heal, light nightly load.
     const nlp=nlPriceFor(sku, sup);
     if(nlp!=null && (b.nlRaw==null || Math.abs(Number(nlp)-Number(b.nlRaw))>0.01)){ nlMatched++;
-      nlDocs.push({ source_id:`channel:NL:${info.skuOrig}`, content:`NL net (Picqer) for ${info.skuOrig}: ${nlp} EUR ex-VAT`,
-        metadata:{ source:"channel_offer", channel:"NL", sku:info.skuOrig, price:Number(nlp), currency:"EUR", vat_incl:false, our_product_handle:info.handle, content_hash:`picqer-nl-net:${nlp}` } });
+      nlRows.push({ sku: info.skuOrig, price: Number(nlp), handle: info.handle, hash: `picqer-nl-net:${nlp}` });
     }
   }
-  console.log(`candidates: cost=${costDocs.length} nl=${nlDocs.length} (nl to-update=${nlMatched}) cost-skipped(sku-mismatch)=${costSkippedMismatch}`);
-  if(!APPLY){ console.log("DRY. sample nl:",JSON.stringify(nlDocs.slice(0,4).map(d=>d.metadata))); return; }
-  let cIng=0,nIng=0;
-  for(const c of chunk(costDocs,CHUNK)){ const r=await push("manufacturer",c); cIng+=r.chunks_ingested??r.documents_received??0; process.stdout.write("c"); }
-  for(const c of chunk(nlDocs,CHUNK)){ const r=await push("channel",c); nIng+=r.chunks_ingested??r.documents_received??0; process.stdout.write("n"); }
-  console.log(`\nPUSHED cost_docs=${costDocs.length} (ingested ${cIng}) | nl_docs=${nlDocs.length} (ingested ${nIng})`);
+  console.log(`candidates: cost=${costRows.length} nl=${nlRows.length} (nl to-update=${nlMatched}) cost-skipped(sku-mismatch)=${costSkippedMismatch}`);
+  if(!APPLY){ console.log("DRY. sample nl:",JSON.stringify(nlRows.slice(0,4))); return; }
+  let c=0,n=0;
+  for(const r of costRows){ await writeCost(r.key,r.cost,r.handle); c++; process.stdout.write("c"); }
+  for(const r of nlRows){ await writeNl(r.sku,r.price,r.handle,r.hash); n++; process.stdout.write("n"); }
+  console.log(`\nWRITTEN cost_rows=${c} nl_rows=${n}`);
   console.log("DONE");
-})().catch(e=>{console.error("ERR",e.message);process.exit(1)});
+})().catch(e=>{console.error("ERR",e.message);process.exit(1)}).finally(()=>db.$disconnect());

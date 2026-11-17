@@ -1,9 +1,11 @@
-# Daily NL⇄ES LLM MATCHER → brain. Links remaining ES products to their NL
-# counterpart one-by-one with a strict 2-stage LLM judge (100%-identical gate) and
-# writes the NL price (ChannelOffer) only on a confirmed match; non-matches get an
-# NL_NOMATCH marker so they're skipped next run (resumable). Self-contained:
-# node:20 runs the script from the generated ConfigMap; no app image rebuild.
-# Complements cronjob-picqer-price-sync (deterministic supplier-code link).
+# Daily NL⇄ES LLM MATCHER → catalogo (SC-5827: was the brain). Links remaining ES
+# products to their NL counterpart one-by-one with a strict 2-stage LLM judge
+# (100%-identical gate) and writes the NL price (channel_offer) only on a
+# confirmed match; non-matches get an NL_NOMATCH marker so they're skipped next
+# run (resumable). Runs the script from the generated ConfigMap inside the
+# rag-app image (needs @prisma/client; NODE_PATH points require() at the image's
+# node_modules). Complements cronjob-picqer-price-sync (deterministic
+# supplier-code link). DEPENDS ON PR #55 (Secret `rag-catalogo-db`): merge it first.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -11,7 +13,7 @@ metadata:
 spec:
   suspend: false
   # Run after both picqer-price-sync (04:30) and the heavy personal graph
-  # maintenance (04:17), so Brain push-ingest does not contend on FalkorDB.
+  # maintenance (04:17), so this writer does not contend with them.
   schedule: "30 6 * * *"
   timeZone: Europe/Madrid
   concurrencyPolicy: Forbid
@@ -27,7 +29,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: nl-llm-matcher
-              image: node:20-alpine
+              image: shopify-app # rewritten by kustomize images: -> harbor …skirmshopshopifyapp:<tag> (@prisma/client)
               command: ["node", "/script/nl-llm-matcher.js"]
               env:
                 - { name: APPLY, value: "1" }
@@ -36,15 +38,16 @@ spec:
                 - { name: FETCH_ATTEMPTS, value: "2" }
                 - { name: RUN_BUDGET_MS, value: "2700000" }
                 - { name: COMPLETION_RESERVE_MS, value: "600000" }
-                - { name: BRAIN_PUSH_CHUNK, value: "25" }
                 - { name: MAX_LLM_ERRORS, value: "2" }
                 - { name: MODEL, value: "tooling" }
                 - { name: MIN_CONF, value: "0.9" }
-                - { name: BRAIN_URL, value: "http://skirmshop-brain.skirmshop-brain-prod.svc.cluster.local" }
-                - { name: BRAIN_WRITE_URL, value: "http://skirmshop-brain-ingest.skirmshop-brain-prod.svc.cluster.local" }
+                # The script lives in /script (ConfigMap); require() must find the
+                # image's @prisma/client in /app/node_modules.
+                - { name: NODE_PATH, value: "/app/node_modules" }
+                # catalogo (postgres-shared) — Secret from PR #55 (externalsecret-catalogo-db.yaml).
+                - name: CATALOGO_DATABASE_URL
+                  valueFrom: { secretKeyRef: { name: rag-catalogo-db, key: CATALOGO_DATABASE_URL } }
                 - { name: LITELLM_URL, value: "http://litellm.litellm.svc.cluster.local:4000" }
-                - name: BRAIN_API_KEY
-                  valueFrom: { secretKeyRef: { name: rag-secrets, key: BRAIN_API_KEY } }
                 - name: LITELLM_KEY
                   valueFrom: { secretKeyRef: { name: rag-litellm-key, key: LITELLM_KEY } }
                 - name: PICQER_API_KEY
