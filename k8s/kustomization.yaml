@@ -9,6 +9,9 @@ resources:
   - https://github.com/pocharlies-org/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
   - cronjob-canonicalize.yaml
   - externalsecret-litellm.yaml
+  - externalsecret-catalogo-db.yaml
+  - externalsecret-hindsight-writer.yaml
+  - configmap-hindsight-ca.yaml
   # cronjob-taxonomy-verify + cronjob-proposals-digest removed 2026-09-26:
   # proyecto taxonomy-verification archivado como deprecated (suspend via PR #36
   # la noche anterior; historial completo en git y wiki #taxonomia-catalogo).
@@ -69,6 +72,8 @@ patches:
             volumes:
               - name: sii-certificate
                 secret: { secretName: sii-certificate }
+              - name: hindsight-ca
+                configMap: { name: hindsight-ca }
             containers:
               - name: app
                 command: ["/bin/sh", "-c"]
@@ -114,6 +119,16 @@ patches:
                   - name: SII_CERTIFICATE_PASSPHRASE
                     valueFrom:
                       secretKeyRef: { name: sii-certificate, key: passphrase }
+                  # SC-5827: base `catalogo` (webhook de Shopify y pestaña Prices), antes del Brain.
+                  - name: CATALOGO_DATABASE_URL
+                    valueFrom:
+                      secretKeyRef: { name: rag-catalogo-db, key: CATALOGO_DATABASE_URL }
+                  # SC-5827: espejo del bank `tienda` por la frontera escritora (identidad skirmshop-rag-app).
+                  - { name: HINDSIGHT_URL, value: "https://hindsight-writer.hindsight.svc:8443" }
+                  - name: HINDSIGHT_TOKEN
+                    valueFrom:
+                      secretKeyRef: { name: rag-hindsight-writer, key: HINDSIGHT_TOKEN }
+                  - { name: NODE_EXTRA_CA_CERTS, value: "/etc/hindsight-writer/ca.crt" }
                   # LiteLLM gateway for the "Corregir con IA" proposal-correction
                   # endpoint (/api/content correct-proposal → reclassify-one). The
                   # verifier LLM path previously ran ONLY in cronjob-taxonomy-verify;
@@ -140,6 +155,7 @@ patches:
                   - secretRef: { name: rag-secrets }
                 volumeMounts:
                   - { name: sii-certificate, mountPath: /app/secrets, readOnly: true }
+                  - { name: hindsight-ca, mountPath: /etc/hindsight-writer, readOnly: true }
   # Embedded app mounted at root: match the bare host, no PathPrefix, no strip.
   - target: { group: traefik.io, version: v1alpha1, kind: IngressRoute, name: app }
     patch: |-
