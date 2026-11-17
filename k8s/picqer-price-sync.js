@@ -23,6 +23,17 @@
  *   Keyed channel:NL:<es-sku> (idempotent).
  *
  * Set APPLY=1 to write.
+ *
+ * SOLO mode (SC-5887, B2b de SC-5806 — «Events, never polling»): with
+ * SOLO=<productcode> (the event Job from workflow
+ * skirmshop.k8s.rag-picqer-price-sync) it does the SAME rules over one product
+ * and its family instead of the full sweep: resolve the product in Picqer, take
+ * its productcode_supplier, refresh every ES sibling (SP-…) that shares it
+ * (the NL case: the NL sibling's price changed and each ES's channel:NL: must
+ * follow), reading the current catalogo row per ES by sku (so the SOLO mode
+ * needs no storefront map). Irrelevant (no SP- sibling) → exit 0 in
+ * seconds. Without SOLO → the sweep above, untouched (it is the declared net:
+ * gap-fill of never-edited products is not an event, C-1).
  */
 if(!process.env.CATALOGO_DATABASE_URL){console.error("CATALOGO_DATABASE_URL is required");process.exit(1);}
 const { PrismaClient } = require("@prisma/client");
@@ -38,13 +49,15 @@ const APPLY=process.env.APPLY==="1";
 // Prices tab). Env-tunable band; 0 disables.
 const COST_PRICE_MINR=Number(process.env.COST_PRICE_MINR||0.15); const COST_PRICE_MAXR=Number(process.env.COST_PRICE_MAXR||6);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms)); const norm=s=>(s||"").toString().trim().toLowerCase();
+const isOtherChan=c=>/^(sp-|uk-?|us-?)/i.test(c); const SOLO=(process.env.SOLO||"").trim();
 async function jget(url,opts={}){ let last; for(let a=0;a<6;a++){ let r; try{ r=await fetch(url,opts); }catch(e){ last=e; await sleep(1500*(a+1)); continue; } /* retry transient network errors ("fetch failed") */ if(r.status===429||r.status>=500){ last=new Error("HTTP "+r.status+" "+url); await sleep(1500*(a+1)); continue; } if(!r.ok) throw new Error("HTTP "+r.status+" "+url); return r.json(); } throw last||new Error("retries exhausted "+url); }
 async function storeMap(host){ const m=new Map(); for(let p=1;p<=80;p++){ const j=await jget(`https://${host}/products.json?limit=250&page=${p}`,{headers:{Accept:"application/json"}}); const ps=j.products||[]; if(!ps.length)break; for(const pr of ps){ const prim=(pr.variants||[])[0]||{}; for(const v of (pr.variants||[])) if(v.sku) m.set(norm(v.sku),{handle:pr.handle, skuOrig:String(v.sku).trim(), price:Number(prim.price)||null}); } if(ps.length<250)break; await sleep(450);} return m; }
 // Current state per product handle, straight from catalogo (replaces the brain's
 // /prices/comparison): ES price, best cost via product_sourced_from (tier order of
 // the read layer aside — gap-fill only needs "has cost"), latest NL net.
-async function currentPrices(){
-  const rows=await db.$queryRawUnsafe(`SELECT p.id AS handle, p.price AS es,
+// skuN (SOLO): only the product whose sku matches, case-insensitive.
+async function currentPrices(skuN){
+  const rows=await db.$queryRawUnsafe(`SELECT p.id AS handle, p.sku AS sku, p.price AS es,
     (SELECT mp.cost FROM catalogo.product_sourced_from psf
        JOIN catalogo.manufacturer_product mp ON mp.id = psf.manufacturer_product_id
       WHERE psf.product_id = p.id AND mp.cost IS NOT NULL
@@ -53,9 +66,9 @@ async function currentPrices(){
        JOIN catalogo.channel_offer co ON co.id = pco.channel_offer_id
       WHERE pco.product_id = p.id AND co.channel = 'NL'
       ORDER BY co.observed_at DESC NULLS LAST LIMIT 1) AS nl_raw
-    FROM catalogo.product p WHERE p.deleted_at IS NULL`);
+    FROM catalogo.product p WHERE p.deleted_at IS NULL${skuN?" AND lower(trim(p.sku)) = $1":""}`, ...(skuN?[skuN]:[]));
   const m=new Map();
-  for(const r of rows) m.set(r.handle,{es:r.es==null?null:Number(r.es),cost:r.cost==null?null:Number(r.cost),nlRaw:r.nl_raw==null?null:Number(r.nl_raw)});
+  for(const r of rows) m.set(r.handle,{sku:r.sku,es:r.es==null?null:Number(r.es),cost:r.cost==null?null:Number(r.cost),nlRaw:r.nl_raw==null?null:Number(r.nl_raw)});
   return m;
 }
 async function writeCost(key,cost,handle){
@@ -71,12 +84,65 @@ async function writeNl(sku,price,handle,hash){
       observed_at = EXCLUDED.observed_at, content_hash = EXCLUDED.content_hash`, id, sku, price, now, hash);
   await db.$executeRawUnsafe(`INSERT INTO catalogo.product_channel_offer (product_id, channel_offer_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, handle, id);
 }
+// SOLO mode (SC-5887, B2b de SC-5806): the sweep's rules over one product and its
+// supplier family, in seconds and without the storefront map. The event Job runs
+// this; the CronJob (no SOLO) keeps running the full sweep as the declared net.
+async function solo(code){
+  const rows=await jget(`${PBASE}/products?productcode=${encodeURIComponent(code)}`,{headers:{Authorization:PAUTH,Accept:"application/json","User-Agent":"event"}});
+  const hit=(rows||[]).find(r=>norm(r.productcode)===norm(code)&&r.active!==false);
+  if(!hit){ console.log(`SOLO=${code}: no esta (o esta inactivo) en Picqer — nada que hacer`); return; }
+  const supRaw=String(hit.productcode_supplier||"").trim(); const sk=norm(supRaw);
+  // Family = every Picqer product sharing the supplier. /products has no working
+  // productcode_supplier filter (verified 16-11); search= matches product and
+  // supplier codes fuzzily and across warehouses, so the exact match is made here.
+  let family=[hit];
+  if(sk){
+    const found=await jget(`${PBASE}/products?search=${encodeURIComponent(supRaw)}`,{headers:{Authorization:PAUTH,Accept:"application/json","User-Agent":"event"}});
+    family=(found||[]).filter(r=>r.active!==false&&norm(String(r.productcode_supplier||"").trim())===sk);
+    if(!family.some(r=>norm(r.productcode)===norm(code))) family.push(hit);
+  }
+  const esSibs=family.filter(r=>/^sp-/i.test(String(r.productcode||"")));
+  if(!esSibs.length){ console.log(`SOLO=${code}: sin hermano SP- (supplier ${supRaw||"sin supplier"}) — irrelevante, salida rapida`); return; }
+  // NL net (ex-VAT) = the cheapest non-ES/UK/US sibling price under this supplier — the sweep's rule.
+  let supNl=null;
+  for(const r of family){ const price=Number(r.price)||0; if(!isOtherChan(norm(r.productcode))&&price>0&&(supNl==null||price<supNl)) supNl=price; }
+  const costRows=[], nlRows=[];
+  for(const e of esSibs){
+    const codeN=norm(e.productcode);
+    // Current catalogo row for this ES sku (its id IS the handle, so SOLO needs no storefront map).
+    const hit1=[...(await currentPrices(codeN))][0];
+    if(!hit1){ continue; } // not in catalogo — the sweep skips it the same way
+    const [handle,b]=hit1;
+    const skuOrig=String(b.sku||e.productcode).trim();
+    const sup=String(e.productcode_supplier||"").trim();
+    const cost=Number(e.fixedstockprice)||0, pqPrice=Number(e.price)||0;
+    // COST gap-fill with the same plausibility guard (a Shopify↔Picqer SKU collision must not stamp a wrong cost).
+    if(cost>0&&b.cost==null&&b.es!=null&&b.es>0){
+      const esEx=b.es/1.21;
+      const mismatch=pqPrice>0&&esEx>0&&(pqPrice>esEx*COST_PRICE_MAXR||pqPrice<esEx*COST_PRICE_MINR);
+      if(!mismatch){ const key=(sup||skuOrig);
+        costRows.push({ key, cost, handle }); }
+    }
+    // NL refresh-on-change from the Picqer net (ex-VAT), same 0.01 band as the sweep.
+    if(supNl!=null&&(b.nlRaw==null||Math.abs(Number(supNl)-Number(b.nlRaw))>0.01)){
+      nlRows.push({ sku: skuOrig, price: Number(supNl), handle, hash: `picqer-nl-net:${supNl}` });
+    }
+    await sleep(110);
+  }
+  console.log(`SOLO=${code}: es_siblings=${esSibs.length} cost=${costRows.length} nl=${nlRows.length} APPLY=${APPLY}`);
+  if(!costRows.length&&!nlRows.length){ console.log("nada que escribir"); return; }
+  if(!APPLY){ console.log("DRY. sample:",JSON.stringify([...costRows,...nlRows].slice(0,4))); return; }
+  for(const r of costRows) await writeCost(r.key,r.cost,r.handle);
+  for(const r of nlRows) await writeNl(r.sku,r.price,r.handle,r.hash);
+  console.log(`WRITTEN cost_rows=${costRows.length} nl_rows=${nlRows.length}`);
+  console.log("DONE");
+}
 (async()=>{
+  if(SOLO){ return solo(SOLO); }
   const es=await storeMap("skirmshop.es");
   const cur=await currentPrices();
   // Picqer: productcode -> {cost, sup}; supplier -> [sibling productcodes]
   const pq=new Map(); const bySup=new Map(); const supNl=new Map(); let poff=0;
-  const isOtherChan=c=>/^(sp-|uk-?|us-?)/i.test(c);
   for(;;){ const rows=await jget(`${PBASE}/products?offset=${poff}`,{headers:{Authorization:PAUTH,Accept:"application/json","User-Agent":"backfill"}}); if(!rows.length)break;
     for(const p of rows){
       // DISCONTINUED guard (defensive): never let an inactive product be a cost/NL

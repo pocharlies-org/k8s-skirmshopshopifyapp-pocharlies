@@ -5,7 +5,7 @@
 # run (resumable). Runs the script from the generated ConfigMap inside the
 # rag-app image (needs @prisma/client; NODE_PATH points require() at the image's
 # node_modules). Complements cronjob-picqer-price-sync (deterministic
-# supplier-code link). DEPENDS ON PR #55 (Secret `rag-catalogo-db`): merge it first.
+# supplier-code link).
 apiVersion: batch/v1
 kind: CronJob
 metadata:

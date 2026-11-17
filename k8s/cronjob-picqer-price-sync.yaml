@@ -6,7 +6,14 @@
 # read/write `catalogo`; NODE_PATH points require() at the image's node_modules).
 # GAP-FILL: only fills products missing cost/NL, never overwrites the driver's
 # data (see the script header for the v1 limitation).
-# DEPENDS ON PR #55 (Secret `rag-catalogo-db`): merge it first.
+#
+# RED DECLARADA (C-1, SC-5887 / SC-5806 «Events, never polling»): desde el 17-11 la
+# propagación de una edición va por evento — Picqer products.changed → picker
+# (picqer.skirmshop.product.changed) → workflow skirmshop.k8s.rag-picqer-price-sync
+# → Job de este CronJob con SOLO=<productcode> (mismo script, mismas reglas). Este
+# horario diario sigue siendo la plantilla del Job y la RED de: el gap-fill (a un
+# producto nunca editado no lo dispara ningún evento), los eventos perdidos y lo que
+# el debounce (300 s) colapse en las ráfagas de importación. No se borra.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
