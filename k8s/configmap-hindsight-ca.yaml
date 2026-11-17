@@ -1,0 +1,21 @@
+# SC-5827 · CA público del escritor de Hindsight (Secret hindsight-writer-ca-tls, ns hindsight, `ca.crt`; CN
+# hindsight-boundary-ca, vence 2036) para verificar el TLS de https://hindsight-writer.hindsight.svc:8443 desde el
+# espejo `tienda` de rag-app. Certificado público, mismo contenido que open-webui-hindsight-ca (ns chat). Si la raíz
+# se regenera, se actualiza aquí.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hindsight-ca
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIBhDCCASqgAwIBAgIUIie0zNGWj/49hwAAVp9hWzVERSEwCgYIKoZIzj0EAwIw
+    IDEeMBwGA1UEAxMVaGluZHNpZ2h0LWJvdW5kYXJ5LWNhMB4XDTI2MTEwMjE3Mzcy
+    M1oXDTM2MTAzMDE3MzcyM1owIDEeMBwGA1UEAxMVaGluZHNpZ2h0LWJvdW5kYXJ5
+    LWNhMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfE4UWvmwBFSVz/WJeueWPm4f
+    5ndEluiblAjbIIZBYr+gSfBUHgu0GJ52Odj3tYdKDz2JO06ssUfefEmJPQr6OqNC
+    MEAwDgYDVR0PAQH/BAQDAgKkMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFEvH
+    IMdDDDWttrZz5gc89B+bIwZtMAoGCCqGSM49BAMCA0gAMEUCIQDPCZum9muSiBP2
+    QJUFn1mB/qbvhscZj3Mr6kXHD1dNmgIgXQjomzn0VdhRnBezMl14n8t09W6v3XZc
+    K4No6tZfQH4=
+    -----END CERTIFICATE-----
