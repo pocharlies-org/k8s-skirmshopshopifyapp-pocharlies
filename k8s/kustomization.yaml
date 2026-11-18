@@ -140,9 +140,18 @@ patches:
                     valueFrom:
                       secretKeyRef: { name: sii-certificate, key: passphrase }
                   # SC-5827: base `catalogo` (webhook de Shopify y pestaña Prices), antes del Brain.
-                  - name: CATALOGO_DATABASE_URL
+                  # SC-5887: el rol `catalogo` tiene connectionLimit 20 (CNPG) y sin
+                  # connection_limit Prisma abre hasta 2×CPU+1 (97 en sauvage): el 18-11
+                  # rag-app se quedó las 20 ociosas de 14:56 a 15:50 y los Jobs de
+                  # picqer-price-sync fallaron con «too many connections». Reparto de
+                  # los 20: rag-app 10 + nl-llm-matcher 3 + price-sync 3 + un Job de
+                  # evento 3 (los scripts fijan su 3 en código).
+                  # shortcut: el secreto no lleva query (si la lleva, el «?» rompe la URL);
+                  # pasar el tope a catalogoClient() si aparece otro consumidor en rag-app.
+                  - name: CATALOGO_DATABASE_URL_BASE
                     valueFrom:
                       secretKeyRef: { name: rag-catalogo-db, key: CATALOGO_DATABASE_URL }
+                  - { name: CATALOGO_DATABASE_URL, value: "$(CATALOGO_DATABASE_URL_BASE)?connection_limit=10&pool_timeout=15&connect_timeout=10&application_name=rag-app" }
                   # SC-5827: espejo del bank `tienda` por la frontera escritora (identidad skirmshop-rag-app).
                   - { name: HINDSIGHT_URL, value: "https://hindsight-writer.hindsight.svc:8443" }
                   - name: HINDSIGHT_TOKEN
