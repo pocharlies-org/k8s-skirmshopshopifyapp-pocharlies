@@ -118,6 +118,12 @@ patches:
                   # (293/500 medidas). Mitigación operativa; el arreglo durable (acotar
                   # la concurrencia del fan-out y no sostener la tx durante trabajo
                   # no-DB) es del equipo de rag-app.
+                  # k8s solo expande $(VAR) de variables definidas antes en la misma lista:
+                  # DB_USER/PASSWORD tienen que ir ANTES de DATABASE_URL.
+                  - name: DB_USER
+                    valueFrom: { secretKeyRef: { name: shared-postgres-app, key: username } }
+                  - name: DB_PASSWORD
+                    valueFrom: { secretKeyRef: { name: shared-postgres-app, key: password } }
                   - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop?connection_limit=15&pool_timeout=15&connect_timeout=10" }
                   # Catalog API credentials have an explicit Vault/ESO owner.
                   # Explicit env entries override the legacy rag-secrets envFrom
