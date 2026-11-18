@@ -102,6 +102,23 @@ patches:
                   # se publican. Kill-switch global: poner "false" aquí.
                   - { name: CATALOG_CREATE_DRAFT_ENABLED, value: "true" }
                   - { name: CATALOG_IMPORT_ENABLED, value: "true" }
+                  # SC-5978: pool de Prisma del web de rag-app. El base del framework
+                  # fija connection_limit=5 (→10 físicas/pod: el framework crea su
+                  # propio PrismaClient además del de la app). rag-app es el único
+                  # consumidor que lo agota: su webhook de catálogo lanza un fan-out
+                  # concurrente de upserts y los flujos de sync (sync-start /
+                  # sync-heartbeat / manual-matches) sostienen conexiones 8-23 s; con
+                  # 5 la cola supera pool_timeout=15 y /api/competitors/.../sync-start
+                  # devuelve 500 (PrismaClientKnownRequestError: connection_limit: 5,
+                  # timeout: 15), lo que tumba el workflow synapse
+                  # `competitors.sync.source` (100 % de fallos ~8/día desde el 11-11).
+                  # El base lo permite explícitamente: "sube el número en el overlay
+                  # si un app demuestra que necesita más". 15/cliente = 30 físicas/pod,
+                  # 60 durante un rolling update — dentro del margen de postgres-shared
+                  # (293/500 medidas). Mitigación operativa; el arreglo durable (acotar
+                  # la concurrencia del fan-out y no sostener la tx durante trabajo
+                  # no-DB) es del equipo de rag-app.
+                  - { name: DATABASE_URL, value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-shared-rw.databases.svc.cluster.local:5432/skirmshop?connection_limit=15&pool_timeout=15&connect_timeout=10" }
                   # Catalog API credentials have an explicit Vault/ESO owner.
                   # Explicit env entries override the legacy rag-secrets envFrom
                   # values and provide a bounded zero-downtime overlap window.
