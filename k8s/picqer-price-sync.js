@@ -132,8 +132,9 @@ async function solo(code){
   console.log(`SOLO=${code}: es_siblings=${esSibs.length} cost=${costRows.length} nl=${nlRows.length} APPLY=${APPLY}`);
   if(!costRows.length&&!nlRows.length){ console.log("nada que escribir"); return; }
   if(!APPLY){ console.log("DRY. sample:",JSON.stringify([...costRows,...nlRows].slice(0,4))); return; }
-  for(const r of costRows) await writeCost(r.key,r.cost,r.handle);
-  for(const r of nlRows) await writeNl(r.sku,r.price,r.handle,r.hash);
+  // One line per row written: the evidence a checker matches against catalogo (the Job itself is pruned).
+  for(const r of costRows){ await writeCost(r.key,r.cost,r.handle); console.log(`wrote cost product=${r.handle} source=${r.key} value=${r.cost}`); }
+  for(const r of nlRows){ await writeNl(r.sku,r.price,r.handle,r.hash); console.log(`wrote nl product=${r.handle} source=channel:NL:${r.sku} value=${r.price}`); }
   console.log(`WRITTEN cost_rows=${costRows.length} nl_rows=${nlRows.length}`);
   console.log("DONE");
 }
