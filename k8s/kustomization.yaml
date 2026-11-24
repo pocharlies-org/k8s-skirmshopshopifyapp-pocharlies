@@ -7,7 +7,9 @@ namespace: skirmshop
 # Deployment `app` + Service `app` + edge IngressRoute `app`.
 resources:
   - https://github.com/pocharlies-org/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
-  - cronjob-canonicalize.yaml
+  # cronjob-canonicalize.yaml removed (SKIRM-626, SC-5617): el barrido nocturno de
+  # canonicalize muere — los products/create|update ya registrados en
+  # /webhooks/catalogo canonicalizan por producto (skirmshopshopifyapp PR SKIRM-626).
   - externalsecret-litellm.yaml
   - externalsecret-catalogo-db.yaml
   - externalsecret-hindsight-writer.yaml
