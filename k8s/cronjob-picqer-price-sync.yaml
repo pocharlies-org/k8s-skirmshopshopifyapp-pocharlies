@@ -1,4 +1,4 @@
-# Daily PICQER PRICE SYNC → catalogo (SC-5827: was the brain). Keeps the Prices
+# PICQER PRICE SYNC → catalogo (SC-5827: was the brain). Keeps the Prices
 # tab's Coste/Margen (Picqer fixedstockprice) and NL (skirmshop.nl) fresh for the
 # WHOLE catalog, not just the ~650 products covered by the synapse
 # manufacturer-sync driver. Runs the script from the generated ConfigMap
@@ -7,23 +7,23 @@
 # GAP-FILL: only fills products missing cost/NL, never overwrites the driver's
 # data (see the script header for the v1 limitation).
 #
-# RED DECLARADA (C-1, SC-5887 / SC-5806 «Events, never polling»): desde el 17-11 la
-# propagación de una edición va por evento — Picqer products.changed → picker
+# PLANTILLA (SC-6594; SC-5806 C-2, Dani 25-11: sin redes por reloj). Desde el 17-11
+# la propagación de una edición va por evento — Picqer products.changed → picker
 # (picqer.skirmshop.product.changed) → workflow skirmshop.k8s.rag-picqer-price-sync
-# → Job de este CronJob con SOLO=<productcode> (mismo script, mismas reglas). Este
-# horario diario sigue siendo la plantilla del Job y la RED de: el gap-fill (a un
-# producto nunca editado no lo dispara ningún evento), los eventos perdidos y lo que
-# el debounce (300 s) colapse en las ráfagas de importación. No se borra.
+# → Job de este CronJob con SOLO=<productcode> (mismo script, mismas reglas, SC-5887).
+# Este CronJob ya no corre por horario: es solo la plantilla del Job. Lo que cubría
+# el barrido diario de las 04:30 y ya no cubre nadie: el gap-fill (a un producto
+# nunca editado no lo dispara ningún evento), los eventos perdidos y los que el
+# debounce descarta (`skipped: active`) en las ráfagas de importación. La pasada
+# completa (sin SOLO) la lanzará el reloj único de la ola 2 si se quiere.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: picqer-price-sync
 spec:
-  suspend: false
-  schedule: "30 4 * * *" # daily 04:30 (Europe/Madrid) — after the nightly catalog syncs
-  timeZone: Europe/Madrid
+  suspend: true
+  schedule: "0 0 31 2 *" # nunca: plantilla del Job que crea synapse-adapter-k8s
   concurrencyPolicy: Forbid
-  startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
