@@ -7,7 +7,9 @@ namespace: skirmshop
 # Deployment `app` + Service `app` + edge IngressRoute `app`.
 resources:
   - https://github.com/pocharlies-org/k8s-shopify-framework-pocharlies.git//base?ref=deploy/prod
-  - cronjob-canonicalize.yaml
+  # cronjob-canonicalize.yaml removed (SKIRM-626, SC-5617): el barrido nocturno de
+  # canonicalize muere — los products/create|update ya registrados en
+  # /webhooks/catalogo canonicalizan por producto (skirmshopshopifyapp PR SKIRM-626).
   - externalsecret-litellm.yaml
   - externalsecret-catalogo-db.yaml
   - externalsecret-hindsight-writer.yaml
@@ -17,7 +19,9 @@ resources:
   # la noche anterior; historial completo en git y wiki #taxonomia-catalogo).
   - cronjob-picqer-price-sync.yaml
   - cronjob-nl-llm-matcher.yaml
-  - cronjob-provider-sourcing-backfill.yaml
+  # cronjob-provider-sourcing-backfill.yaml removed (SC-6602 row #61): el re-sello
+  # nocturno (04:30) de product_creator.provider_sourcing pasa a evento - recordSyncResult
+  # re-sella los productos que cada sync toca (sin barrido de respaldo, decision C-2).
   - product-weight-edge.yaml
   - cronjob-redirect-health.yaml
   - cronjob-parent-health.yaml
@@ -50,8 +54,8 @@ configMapGenerator:
 images:
   - name: shopify-app
     newName: harbor.lan.e-dani.com/homelab/skirmshopshopifyapp
-    newTag: sc5827-espejo-20261117
-    digest: sha256:f2a3199ba3669c4d48b19fa0817de180c450de865ce37440a9e7968f632c3c6b
+    newTag: sc6602-eventos-20261125
+    digest: sha256:7f48aa664141d05e0f0cee060485d711d2230cb9f89cd97aa519e21583739dcc
 
 patches:
   # App = "Pocharlies Catalog RAG Sync" (legacy skirmshopshopifyapp). Embedded at
