@@ -19,7 +19,9 @@ resources:
   # la noche anterior; historial completo en git y wiki #taxonomia-catalogo).
   - cronjob-picqer-price-sync.yaml
   - cronjob-nl-llm-matcher.yaml
-  - cronjob-provider-sourcing-backfill.yaml
+  # cronjob-provider-sourcing-backfill.yaml removed (SC-6602 row #61): el re-sello
+  # nocturno (04:30) de product_creator.provider_sourcing pasa a evento - recordSyncResult
+  # re-sella los productos que cada sync toca (sin barrido de respaldo, decision C-2).
   - product-weight-edge.yaml
   - cronjob-redirect-health.yaml
   - cronjob-parent-health.yaml
